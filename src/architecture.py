@@ -38,7 +38,7 @@ class TransformerConfig:
     num_kv_heads: int = 4
     num_layers: int = 12
     d_ff: int = 2048
-    max_seq_len: int = 1024
+    max_seq_len: int = 2048
     pad_token_id: int = 0
     rope_theta: float = 10000.0
     dtype: str = "bfloat16"

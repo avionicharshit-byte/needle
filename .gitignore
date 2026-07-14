@@ -92,3 +92,5 @@ tokenizer/
 data/
 voice_samples/
 needle-ui.*
+*.model
+*.vocab

@@ -13,8 +13,9 @@ EOS_ID = 1
 BOS_ID = 2
 UNK_ID = 3
 
-_HF_MODEL_REPO = "Cactus-Compute/needle"
-_HF_TOKENIZER_DIR = "tokenizer_lm"
+# Single HF repo for all branch artifacts: tokenizer/ and checkpoints/.
+HF_REPO = "Cactus-Compute/simple-attention-networks"
+_HF_TOKENIZER_DIR = "tokenizer"
 
 
 class SANTokenizer:
@@ -65,7 +66,7 @@ def _download_tokenizer_from_hf():
     os.makedirs(TOKENIZER_DIR, exist_ok=True)
     for fname in ["tokenizer.model", "tokenizer.vocab"]:
         hf_hub_download(
-            repo_id=_HF_MODEL_REPO,
+            repo_id=HF_REPO,
             filename=f"{_HF_TOKENIZER_DIR}/{fname}",
             repo_type="model",
             local_dir=TOKENIZER_DIR,
@@ -143,12 +144,13 @@ def train_tokenizer(dataset="synth", text_field=None, vocab_size=16384,
     if upload:
         from huggingface_hub import HfApi
         api = HfApi()
+        api.create_repo(HF_REPO, repo_type="model", private=True, exist_ok=True)
         for ext in (".model", ".vocab"):
             api.upload_file(
                 path_or_fileobj=TOKENIZER_PREFIX + ext,
                 path_in_repo=f"{_HF_TOKENIZER_DIR}/tokenizer{ext}",
-                repo_id=_HF_MODEL_REPO,
+                repo_id=HF_REPO,
                 repo_type="model",
             )
-        print(f"Uploaded tokenizer to {_HF_MODEL_REPO}/{_HF_TOKENIZER_DIR}/")
+        print(f"Uploaded tokenizer to {HF_REPO}/{_HF_TOKENIZER_DIR}/")
     return model_path

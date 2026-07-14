@@ -29,8 +29,14 @@ class DatasetSpec:
 
 
 def _fmt_synth(ex):
-    """PleIAs/SYNTH: query + synthetic answer as one document."""
-    parts = [ex.get("query"), ex.get("synthetic_answer")]
+    """PleIAs/SYNTH: query + reasoning trace + answer as one document.
+
+    SYNTH is reasoning-by-design — 97%+ of samples carry a synthetic_reasoning
+    trace, and the dataset's SOTA-for-size results are for the full format.
+    Traces also externalize intermediate computation into context, the regime
+    the SAN hypothesis targets.
+    """
+    parts = [ex.get("query"), ex.get("synthetic_reasoning"), ex.get("synthetic_answer")]
     text = "\n\n".join(p.strip() for p in parts if p and p.strip())
     return text or None
 
@@ -115,22 +121,30 @@ def packed_block_stream(tokenizer, spec, batch_size, seq_len, seed=42, skip_docs
     yield from _pack_rows(tokenizer, texts, batch_size, seq_len)
 
 
-def build_val_set(tokenizer, spec, num_blocks, batch_size, seq_len):
-    """Pack the unshuffled head of the stream into a held-out val set.
+def build_val_set(tokenizer, spec, num_blocks, batch_size, seq_len, oversample=10, seed=3407):
+    """Pack a seeded 1-in-`oversample` subsample of the stream head into the val set.
 
-    Returns (tokens[num_blocks, B, T+1], seg_ids[num_blocks, B, T+1], docs_consumed).
-    Pass docs_consumed as skip_docs to packed_block_stream so train never sees
-    the holdout (the last, partially-packed doc is skipped too, conservatively).
+    Sampling across a window `oversample`x wider than the raw head guards
+    against ordering artifacts in the corpus (e.g. amplified samples grouped
+    by seed article) while staying deterministic and independent of the
+    training shuffle seed.
+
+    Returns (tokens[num_blocks, B, T+1], seg_ids[num_blocks, B, T+1], docs_consumed),
+    where docs_consumed counts the FULL window. Pass it as skip_docs to
+    packed_block_stream so train never sees any window doc (kept or not).
     """
+    import random
+    rng = random.Random(seed)
     counter = {"docs": 0}
 
-    def counted_texts():
+    def sampled_texts():
         for text in stream_texts(spec, shuffle=False):
             counter["docs"] += 1
-            yield text
+            if rng.random() < 1.0 / oversample:
+                yield text
 
     blocks_t, blocks_s = [], []
-    for tokens, segs in _pack_rows(tokenizer, counted_texts(), batch_size, seq_len):
+    for tokens, segs in _pack_rows(tokenizer, sampled_texts(), batch_size, seq_len):
         blocks_t.append(tokens)
         blocks_s.append(segs)
         if len(blocks_t) == num_blocks:

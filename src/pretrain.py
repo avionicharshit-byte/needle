@@ -23,7 +23,7 @@ import numpy as np
 import optax
 from tqdm import tqdm
 
-from .tokenizer import get_tokenizer
+from .tokenizer import HF_REPO, get_tokenizer
 from .data import (
     PrefetchStream,
     build_val_set,
@@ -38,9 +38,6 @@ from .architecture import (
 from .run import CHECKPOINT_FORMAT_VERSION
 from .optim import create_train_state
 from .distributed import _replicate, _unreplicate, shard_batch, _upload_checkpoint
-
-_HF_CHECKPOINT_REPO = "Cactus-Compute/checkpoints"
-
 
 def _losses(apply_fn, params, tokens, seg_ids):
     """Doc-boundary-masked CE + z-loss over one packed block. Returns (total, ce)."""
@@ -163,8 +160,8 @@ def pretrain(args):
             local_dir = os.path.dirname(resume_path) or "checkpoints"
             os.makedirs(local_dir, exist_ok=True)
             resume_path = hf_hub_download(
-                repo_id=_HF_CHECKPOINT_REPO,
-                filename=os.path.basename(resume_path),
+                repo_id=HF_REPO,
+                filename=f"checkpoints/{os.path.basename(resume_path)}",
                 repo_type="model",
                 local_dir=local_dir,
             )

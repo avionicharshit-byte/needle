@@ -119,7 +119,7 @@ def main():
                    help="Override resume step (skip this many batches)")
     p.add_argument("--batch-size", type=int, default=128,
                    help="Per-device batch size in packed blocks (default: 128)")
-    p.add_argument("--seq-len", type=int, default=1024)
+    p.add_argument("--seq-len", type=int, default=2048)
     p.add_argument("--max-steps", type=int, default=100_000,
                    help="Total training steps — also the WSD schedule horizon (default: 100000)")
     p.add_argument("--optimizer", type=str, default="muon", choices=["muon", "adamw"])
@@ -173,7 +173,7 @@ def main():
                    help="Dataset for held-out val loss (default: synth)")
     p.add_argument("--text-field", type=str, default=None,
                    help="Text field name for ad-hoc HF datasets")
-    p.add_argument("--seq-len", type=int, default=1024)
+    p.add_argument("--seq-len", type=int, default=2048)
     p.add_argument("--batch-size", type=int, default=8)
     p.add_argument("--val-blocks", type=int, default=64,
                    help="Number of packed validation blocks (default: 64)")

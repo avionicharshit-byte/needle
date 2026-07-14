@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-_HF_CHECKPOINT_REPO = "Cactus-Compute/checkpoints"
+from .tokenizer import HF_REPO
 
 
 def _replicate(tree):
@@ -39,16 +39,16 @@ def _upload_checkpoint(ckpt_path):
         try:
             from huggingface_hub import HfApi
             api = HfApi()
-            api.create_repo(_HF_CHECKPOINT_REPO, repo_type="model", private=True, exist_ok=True)
+            api.create_repo(HF_REPO, repo_type="model", private=True, exist_ok=True)
             filename = os.path.basename(ckpt_path)
-            print(f"[hf] Uploading {filename} to {_HF_CHECKPOINT_REPO} ...")
+            print(f"[hf] Uploading {filename} to {HF_REPO}/checkpoints/ ...")
             api.upload_file(
                 path_or_fileobj=ckpt_path,
-                path_in_repo=filename,
-                repo_id=_HF_CHECKPOINT_REPO,
+                path_in_repo=f"checkpoints/{filename}",
+                repo_id=HF_REPO,
                 repo_type="model",
             )
-            print(f"[hf] Checkpoint uploaded: {_HF_CHECKPOINT_REPO}/{filename}")
+            print(f"[hf] Checkpoint uploaded: {HF_REPO}/checkpoints/{filename}")
         except Exception as e:
             print(f"[hf] Warning: checkpoint upload failed: {e}")
 
