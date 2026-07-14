@@ -1,10 +1,6 @@
-# Needle
+# Simple Attention Networks
 
-<img src="assets/banner.png" alt="Logo" style="border-radius: 30px; width: 100%;">
-
-We distilled Gemini 3.1 into a 26m parameter "[Simple Attention Network](docs/simple_attention_networks.md)" that you can even finetune locally on your Mac/PC.
-In production, Needle runs on [Cactus](https://github.com/cactus-compute/cactus) at 6000 toks/sec prefill and 1200 decode speed. 
-Weights are fully open on [Cactus-Compute/needle](https://huggingface.co/Cactus-Compute/needle), as well as the dataset generation. 
+We show that MLPs can be completely dropped from transformer networks.
 
 ```
 d=512, 8H/4KV, BPE=8192
@@ -52,115 +48,41 @@ d=512, 8H/4KV, BPE=8192
     └───────────┘
 ```
 
-- Pretrained on 16 TPU v6e for 200B tokens (27hrs). 
-- Post-trained on 2B tokens of single-shot function call dataset (45mins). 
+## Why No FFN
 
-Needle is an experimental run for Simple Attention Networks, geared at redefining tiny AI for consumer devices (phones, watches, glasses...).
-So while it beats FunctionGemma-270m, Qwen-0.6B, Graninte-350m, LFM2.5-350m on single-shot function call for personal AI,
-Those model are have more scope/capacity and excel in conversational settings. Also, small models can be finicky. 
-Please use the UI in the next section to test on your own tools, and finetune accordingly, at the click of a button. 
+- **Softmax is nonlinear.** `softmax(QK^T/sqrt(d)) * V` is a data-dependent nonlinear mixing operation. For a task that is about routing information (query -> tool alignment), attention is the right primitive.
+- **Tool calling is retrieval-and-assembly.** Match query to tool name, extract argument values, assemble JSON. All three are aligning and copying between input and output -exactly what cross-attention does. No step requires per-position feature transformation (which is what FFN provides).
+- **At small scale, FFN parameters are wasted.** ~2/3 of standard transformer parameters are FFN. For a <50M model on a structured task, those parameters contribute less than more attention layers (deeper cross-attention = better query-tool alignment).
+- **Fewer parameters = faster inference.** FFNs have the biggest GEMM/GEMV dimensions -removing them cuts per-layer parameters by ~2/3, directly reducing the memory bandwidth bottleneck that dominates latency on edge devices.
 
-## Quickstart
+## Gated Residuals
 
-```bash
-git clone https://github.com/cactus-compute/needle.git
-cd needle && source ./setup
-needle playground
-```
+Without FFN, there is no per-position nonlinear rewriting per layer. This makes residual connection design critical.
 
-Opens a web UI at http://127.0.0.1:7860 where you can test and finetune on your own tools. Weights are auto-downloaded.
+- **Standard residual** `x = x + Attn(Norm(x))` -attention can only ADD a delta. Without FFN to do the rewriting, purely additive is limiting.
+- **No residual** `x = Attn(Norm(x))` -each layer fully rewrites, but we lose the gradient highway. Deep networks (12+ layers) will not train.
+- **Gated residual (ours)** `x = x + sigmoid(gate) * Attn(Norm(x))` -per-sublayer learnable scalar, initialized to 0. sigmoid(0) = 0.5, so training starts with half-strength residual. The model can learn to sharpen useful layers (g->1) or suppress unhelpful ones (g->0) without losing gradient flow.
 
-## Usage (Python)
+## ZCRMSNorm
 
-```python
-from needle import SimpleAttentionNetwork, load_checkpoint, generate, get_tokenizer
+- **Standard RMSNorm:** `x * gamma / RMS(x)`, gamma initialized to 1.
+- **ZCRMSNorm:** `x * (1 + gamma) / RMS(x)`, gamma initialized to 0.
+- At init, ZCRMSNorm is identity-up-to-scale. Pairs with gated residuals: the entire block starts as a damped identity + damped normalized attention. No component starts with a strong learned bias.
+- From the nGPT / DeepSeek-V3 line of work. Applied to QK heads as well (QK-norm) for training stability.
 
-params, config = load_checkpoint("checkpoints/needle.pkl")
-model = SimpleAttentionNetwork(config)
-tokenizer = get_tokenizer()
+## Muon for Attention-Only
 
-result = generate(
-    model, params, tokenizer,
-    query="What's the weather in San Francisco?",
-    tools='[{"name":"get_weather","description":"Get current weather for a city.","parameters":{"location":{"type":"string","description":"City name.","required":true}}}]',
-    stream=False,
-)
-print(result)
-# [{"name":"get_weather","arguments":{"location":"San Francisco"}}]
-```
+- **Dual optimizer:** Muon (Q/K/V/O projections, LR 0.02, WD 0.01) + AdamW (everything else, LR 3e-4).
+- Without FFN, the model is a deep stack of linear projections with softmax routing. 
+- Muon enforces orthogonality on weight updates via Newton-Schulz, preventing the representation collapse that can happen when stacking many linear layers without interleaving nonlinearities.
 
-## Finetuning
-
-```bash
-# Playground (generates data via Gemini, trains, evaluates, bundles result)
-needle playground
-
-# CLI (auto-downloads weights if not local)
-needle finetune data.jsonl
-```
-
-### Data format
-
-Each line in the JSONL file has three fields: `query`, `tools`, and `answers`.
-
-**Tool schema:**
-```json
-{
-  "name": "get_weather",
-  "description": "Get current weather for a city.",
-  "parameters": {
-    "location": { "type": "string", "description": "City name.", "required": true }
-  }
-}
-```
-
-**Answer schema:**
-```json
-{ "name": "get_weather", "arguments": { "location": "Paris" } }
-```
-
-**Full JSONL example** (each line is one training example, `tools` and `answers` are JSON-encoded strings):
-```jsonl
-{"query": "What's the weather in Paris?", "tools": "[{\"name\":\"get_weather\",\"description\":\"Get current weather for a city.\",\"parameters\":{\"location\":{\"type\":\"string\",\"description\":\"City name.\",\"required\":true}}}]", "answers": "[{\"name\":\"get_weather\",\"arguments\":{\"location\":\"Paris\"}}]"}
-{"query": "Turn off the lights", "tools": "[{\"name\":\"get_weather\",\"description\":\"Get current weather for a city.\",\"parameters\":{\"location\":{\"type\":\"string\",\"description\":\"City name.\",\"required\":true}}},{\"name\":\"toggle_lights\",\"description\":\"Toggle smart lights on or off.\",\"parameters\":{\"state\":{\"type\":\"string\",\"description\":\"on or off.\",\"required\":true}}}]", "answers": "[{\"name\":\"toggle_lights\",\"arguments\":{\"state\":\"off\"}}]"}
-```
-
-Provide at least **120 examples per tool** (100 train / 10 val / 10 test). Fewer examples will overfit — you'll see perfect training metrics but the model won't generalize. Vary query phrasing and include examples with multiple tools available.
-
-### Using a finetuned model
-
-Finetuning saves the best checkpoint as `checkpoints/needle_finetuned_<id>_best.pkl`:
-
-```bash
-needle run --checkpoint checkpoints/needle_finetuned_*_best.pkl \
-  --query "What's the weather?" --tools '[{"name":"get_weather","description":"Get current weather for a city.","parameters":{"location":{"type":"string","description":"City name.","required":true}}}]'
-```
-
-```python
-params, config = load_checkpoint("checkpoints/needle_finetuned_<id>_best.pkl")
-model = SimpleAttentionNetwork(config)
-result = generate(model, params, get_tokenizer(), query="...", tools='[...]', stream=False)
-```
-
-## CLI
+## Citation
 
 ```
-needle playground                  Test and finetune via web UI
-needle finetune <data.jsonl>       Finetune on your own data
-needle run --query "..." --tools   Single inference
-needle train                       Full training run
-needle pretrain                    Pretrain on PleIAs/SYNTH
-needle eval --checkpoint <path>    Evaluate a checkpoint
-needle tokenize                    Tokenize dataset
-needle generate-data               Synthesize training data via Gemini
-needle tpu <action>                TPU management (see docs/tpu.md)
-```
-
-```
-@misc{ndubuaku2026needle,
-  title={Needle},
-  author={Henry Ndubuaku, Jakub Mroz,  Karen Mosoyan, Roman Shemet, Parkirat Sandhu, Satyajit Kumar, Noah Cylich, Justin H. Lee},
+@misc{ndubuaku2026SAN,
+  title={Simple Attention Networks},
+  author={Henry Ndubuaku},
   year={2026},
-  url={https://github.com/cactus-compute/needle}
+  url={https://github.com/cactus-compute/needle/blob/main/docs/simple_attention_networks.md}
 }
 ```
