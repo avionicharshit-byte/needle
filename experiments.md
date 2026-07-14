@@ -1,224 +1,209 @@
-# Simple Attention Networks — NeurIPS Main-Track Experiment Plan
+# Simple Attention Networks — Experiment Design
 
-Target: NeurIPS 2027 main track (abstract deadline ~May 2027).
-Status: draft v1, 2026-07-14.
+Target: NeurIPS main track. Status: draft v2, 2026-07-14 (supersedes the
+tool-calling-era plan; this branch studies SAN on general pretraining).
 
----
-
-## 1. The claim, stated so it can be falsified
-
-The current doc frames SAN as a system (no FFN + encoder-decoder + gated residuals +
-ZCRMSNorm + Muon + QAT + loss weighting + contrastive head). A systems paper with 8
-entangled techniques and one task will not survive main-track review. The paper should
-make one scientific claim, with the components as supporting recipe:
-
-> **H1 (dispensability).** On tasks whose requisite knowledge is fully present in the
-> input context (retrieval-and-assembly tasks: function calling, extraction, copying),
-> attention-only transformers match FFN transformers at equal parameter count — and beat
-> them at equal inference cost.
->
-> **H2 (boundary).** The gap reverses on tasks requiring parametric knowledge
-> (closed-book QA, fact completion): FFN layers earn their parameters exactly when
-> knowledge must live in weights. This operationalizes the "FFNs are key-value
-> memories" hypothesis (Geva et al., 2021) as an architecture-selection rule.
->
-> **H3 (trainability).** Deep attention-only stacks are trainable only with the right
-> stabilizers. Pure attention suffers rank collapse (Dong et al., 2021); residuals
-> alone slow but don't stop it without FFN's per-position rewriting. Gated residuals +
-> zero-centered norms + orthogonalized updates (Muon) jointly prevent collapse — we
-> show this both in training curves and in measured representation rank across depth.
-
-H2 is what elevates this from "we made a small model for tool calling" to a
-generalizable finding: **FFNs store, attention routes; externalize the knowledge and
-you can delete the store.** H3 gives the mechanistic story reviewers want.
-
-### Positioning against prior work (reviewers will check)
-
-| Prior work | Relationship | What we must do |
-|---|---|---|
-| Dong et al. 2021, "Attention is not all you need" (rank collapse) | Proves pure attention collapses; says MLPs+residuals prevent it | Our H3 is the empirical counterpoint: MLPs are not necessary for collapse-prevention if updates are orthogonalized and residuals gated. Measure rank directly. |
-| Geva et al. 2021, FFN = key-value memories | Motivates H2 | Cite as hypothesis source; our contribution is the causal/architectural test |
-| ReZero, SkipInit, LayerScale, Highway nets | Gated residual is in this family | Ablate against ReZero (α·F(x), α=0 init) and LayerScale explicitly; claim recipe, not novelty |
-| nGPT, DeepSeek-V3 zero-centered norms | ZCRMSNorm source (already cited) | Ablate; claim recipe, not novelty |
-| Muon (Jordan et al. 2024; Moonlight) | Optimizer we repurpose | Novel angle: Muon as *enabler of FFN-free depth*, not just faster training |
-| gMLP / "Pay Attention to MLPs" | The mirror-image ablation (drop attention, keep MLP) | Cite as symmetric evidence that either primitive can carry tasks matched to its inductive bias |
-| TinyAgent, Octopus v2, xLAM, FunctionGemma, ToolACE/APIGen | Small function-calling models | These are baselines, not competitors for the scientific claim |
+Hardware: one 8×H100 node (RunPod). Framework: JAX pmap, flash attention,
+bf16 compute. Data: PleIAs/SYNTH (~80M docs ≈ 70B tokens under our tokenizer),
+single-turn ChatML with reasoning traces, 16k BPE, seq_len 2048, doc-boundary
+masked packing.
 
 ---
 
-## 2. Experiment matrix
+## 1. Hypotheses
 
-### E1 — Main comparison: author-trained controls (the load-bearing experiment)
+> **H1 — dispensability.** On reasoning-oriented pretraining (SYNTH), a
+> decoder-only attention-only transformer matches a standard transformer at
+> equal parameter count on val loss and downstream evals. Reasoning traces
+> externalize intermediate computation into context — the regime where
+> attention (routing/copying over visible tokens) should carry the load and
+> per-position FFN transformation should matter least.
+>
+> **H2 — gap decomposition.** Whatever SAN–FFN gap exists concentrates on
+> parametric-knowledge demands. Measured two ways SYNTH makes cheap:
+> (a) by exercise type (memorization vs math/rag/writing — `exercise` field),
+> (b) by token region (trace vs answer — atomic `<think>`/`</think>` marker
+> ids). Prediction: gap largest on memorization-answers, smallest on traces.
+> Operationalizes "FFNs store, attention routes" (Geva et al. 2021).
+>
+> **H3 — trainability.** Deep attention-only stacks train only with the right
+> stabilizers. Pure attention rank-collapses (Dong et al. 2021); we claim
+> gated residuals + ZCRMSNorm + Muon prevent it without FFN, and show it in
+> training curves AND measured per-layer effective rank (`--log-rank-every`).
 
-Comparing a bespoke 26M model against off-the-shelf 270M–600M generalists is not a
-controlled comparison and reviewers will say so. Every control below is trained by us
-with **identical tokenizer (8192 BPE), data, data order, steps, and eval**; only the
-architecture axis varies.
+Positioning: same as before — vs Dong et al. (counterpoint), Geva et al.
+(hypothesis source), ReZero/LayerScale (gated residual family — recipe, not
+novelty), nGPT/DeepSeek-V3 (ZCRMSNorm source), Muon (novel angle: enabler of
+FFN-free depth), gMLP (mirror-image evidence). New: PleIAs Monad-56M /
+Baguettotron-321M — same data, same format, published numbers = free external
+reference points for our controls.
 
-| ID | Architecture | Params | Purpose |
+## 2. Fixed experimental frame (identical across ALL arms)
+
+- Tokenizer (16,384 BPE, trained on ChatML-formatted SYNTH), seq_len 2048,
+  packing, loss masking, z-loss, WSD schedule shape, warmup/decay ratios,
+  data order (same `--seed` within a comparison), val set (seeded window
+  subsample, disjoint from train), eval cadence.
+- LR conventions: Adam `--lr × 8`, Muon `--muon-lr × √8`. Weight decay 0.01
+  on Dense kernels in both optimizer arms.
+- **Params reported as non-embedding first** — tied 16k×d embeddings are
+  identical within every pair and would otherwise flatter small models.
+- Default token budget: 100k steps × 512 rows × 2048 = **105B tokens**
+  (~1.5 passes over SYNTH; PleIAs report convergence at 100–200B).
+
+## 3. Configurations (measured with `jax.eval_shape`, vocab 16,384)
+
+| ID | Config | Total params | Non-emb | Train GFLOPs/tok* | Role |
+|---|---|---|---|---|---|
+| SAN | 20L d512, no FFN | 24.13M | 15.74M | ~0.40 | ours |
+| FFN-isoP | 4L d512 ff2048 | 24.12M | 15.73M | ~0.20 | iso-parameter (Δ < 0.04%) |
+| FFN-isoF | 9L d512 ff2048 | ~43M | ~35M | ~0.39 | iso-training-FLOPs |
+| FFN-isoD | 20L d512 ff2048 | 87.06M | 78.67M | ~0.72 | iso-depth (param-efficiency angle) |
+
+*at T=2048 incl. attention quadratic term; halve for causal effective. The
+FLOP asymmetry is the finding's honest frame: at iso-param SAN spends ~2× the
+FLOPs/token; at iso-FLOP the FFN arm gets ~2.2× the params. Report all three
+matchings — a reviewer can pick their preferred axis and we win or lose on it
+explicitly.
+
+Scaling ladder (SAN side; FFN-isoP partners computed the same way):
+
+| Size | Config | Total | Non-emb |
 |---|---|---|---|
-| C0 | SAN (12enc/8dec, d=512, no FFN) | 26M | ours |
-| C1 | Enc-dec **with FFN**, depth/width reduced to match params (e.g. d=384, 8enc/6dec, d_ff=4d) | 26M | iso-parameter |
-| C2 | Enc-dec with FFN, same 12enc/8dec, d=512, d_ff=2048 | ~57M | iso-depth (shows param efficiency) |
-| C3 | Enc-dec with FFN, iso-*training-FLOPs* to C0 | free | iso-compute |
-| C4 | Decoder-only, no FFN, iso-param | 26M | isolates enc-dec choice |
-| C5 | Decoder-only with FFN, iso-param (a "normal tiny LM") | 26M | the strongest conventional control |
-| C6 | Flan-T5-small finetuned on our post-train data | 77M | public enc-dec reference point |
+| tiny | 10L d256 | 6.16M | 1.97M |
+| small | 14L d384 | 12.49M | 6.20M |
+| base | 20L d512 | 24.13M | 15.74M |
+| large | 26L d640 | 42.46M | 31.97M |
+| xl | 32L d768 | 69.24M | 56.65M |
 
-The codebase already supports C1/C2 via `no_feedforward=False` and `d_ff` in
-`TransformerConfig` (architecture.py); C4/C5 need a decoder-only path (~small change:
-encoder-less config with tools+query in the decoder context).
+## 4. Experiment matrix
 
-**Primary metrics:** exact match, call F1, name F1, JSON parse rate (existing
-`benchmark_tool_calls`), on internal test set + public benchmarks (E8).
-**Headline figure:** accuracy vs. params and accuracy vs. inference latency (Pareto),
-with C0 dominating at iso-param and iso-latency.
+### E0 — LR fairness sweep (before anything headline)
+Per arm {SAN, FFN-isoP} × {muon, adamw}: 3-point LR sweep (0.5×, 1×, 2× of
+defaults) at 5B tokens. Best LR per arm carries forward. "We tuned ours and
+not the control" is a desk-reject risk; this is the insurance.
+~12 runs × 5B = 60B tokens.
 
-### E2 — Component ablations (one-factor-at-a-time from C0)
+### E1 — Headline comparison
+SAN vs FFN-isoP vs FFN-isoF vs FFN-isoD at 105B tokens, muon, seed 42; then
++2 seeds for SAN and FFN-isoP (the load-bearing pair).
+6 × 105B + 2 × 105B = ~840B tokens.
+Primary metric: val loss/PPL; secondary: downstream evals (E6), throughput.
 
-Run at the ablation tier (§5): ~20B pretrain tokens + full post-train, 3 seeds each.
+### E2 — The optimizer×architecture 2×2 (H3 core)
+{muon, adamw} × {SAN, FFN-isoP} at 30B tokens. The prediction that matters:
+adamw hurts the SAN arm *more* than the FFN arm (interaction term, not main
+effect). Already flag-complete: `--optimizer`, `--ffn`.
+2 remaining cells × 30B = 60B tokens.
 
-| Axis | Variants | Prediction |
+### E3 — Component ablations (20B tokens each, SAN arm)
+| Axis | Variants | Needs code |
 |---|---|---|
-| Residual | gated σ(g), g=0 (ours) · standard `x+F(x)` · ReZero `x+αF(x)`, α=0 · LayerScale · no residual | no-residual fails to train ≥12 layers; standard trains but worse; gated ≈ ReZero or slightly better |
-| Norm | ZCRMSNorm · RMSNorm(γ=1) · no QK-norm | ZCRMSNorm helps stability at high Muon LR |
-| Optimizer | Muon+AdamW (ours) · AdamW only · Muon on everything | AdamW-only degrades/diverges as depth grows **only when FFN is absent** — the interaction Muon×no-FFN is H3's key cell. Run the 2×2: {Muon, AdamW} × {FFN, no-FFN}. |
-| INT4 QAT | on (every 100 steps) · off · every step · PTQ-only | QAT-on ≥ QAT-off in bf16 eval (regularization claim) AND >> PTQ in INT4 eval (deployment claim). If bf16 claim fails, drop the regularization framing. |
-| Loss weighting | 1/2/1.5/4 (ours) · uniform · structure-only | weighted wins on value accuracy at equal exact-match elsewhere |
-| Contrastive head | joint @0.1× (ours) · off · separate retriever, same size | measure both generation quality (does aux loss hurt?) and retrieval R@k |
-| Depth allocation | 12/8 (ours) · 8/12 · 16/4 · 10/10 at fixed total | encoder-heavy wins (tools need bidirectional encoding) |
+| Residual | gated (ours) · ReZero (α init 0, no sigmoid) · standard `x+F(x)` · none | flag |
+| Norm | ZCRMSNorm (ours) · RMSNorm γ=1 · no QK-norm | flag |
+| Post-attn norm | off (ours) · sandwich `x+σ(g)·Norm(Attn(Norm(x)))` | flag |
+| Depth at iso-param | {8, 20, 32, 48}L (d adjusted) × {gates on/off} | configs only |
+~14 runs × 20B = 280B tokens. Report one table: Δval-loss per component,
+mean±std over 3 seeds for any variant within noise of the default.
 
-Report a single ablation table: Δ exact-match and Δ pretrain loss per removed
-component, mean ± std over 3 seeds.
+### E4 — Gap decomposition (H2; evaluation of E1/E2 checkpoints — no new training)
+- Per-exercise val loss: separate packed val sets filtered by `exercise`
+  (memorization / mcq / math / rag / creative-writing).
+- Per-region val loss: split token positions by `<think>`…`</think>` marker
+  ids (4–7) into query / trace / answer regions.
+- The H2 figure: SAN−FFN Δloss per (exercise × region) cell, with the
+  memorization-answer cell predicted worst and trace cells predicted best.
 
-### E3 — Scaling: does the FFN-free advantage survive scale?
+### E5 — Data scaling / repetition (uses `--max-docs`)
+SAN + FFN-isoP at 30B tokens with `--max-docs` ∈ {2M, 8M, 32M, full}
+(≈17×, 4×, 1×, 0.4× repetition). Secondary H2 probe: FFN arms should benefit
+more from repetition (memorization capacity), SAN should degrade less under
+data constraint. 8 runs × 30B = 240B tokens.
 
-The most likely reviewer objection: "this only works at 26M." Answer it directly.
+### E6 — Downstream evals (no training; needs lm-eval adapter)
+0-shot loglikelihood tasks suitable for <100M models: lambada, hellaswag,
+arc_easy, piqa, sciq, winogrande, mmlu. Direct comparison against published
+Monad-56M and Baguettotron-321M numbers (same data + format). Run on every
+E1 checkpoint.
 
-- **Parameter scaling:** {5M, 13M, 26M, 60M, 125M} × {SAN, iso-param FFN control},
-  compute-matched (Chinchilla-style token budgets per size). Plot task metric and
-  pretrain loss vs. params; locate the crossover if one exists. *An honest crossover
-  strengthens H2 — FFNs win when scale lets them memorize.*
-- **Data scaling:** C0 at {10B, 30B, 100B, 200B} tokens.
-- **Depth scaling (H3):** attention-only at {8, 20, 32, 48} total layers, fixed params
-  (shrink d), with/without gates and Muon → trainability frontier.
+### E7 — Mechanistic (H3; instrumentation mostly built)
+- Rank trajectories: `--log-rank-every 2500` on all E1/E2/E3 runs (free).
+- Gate trajectories: per-layer σ(g) over training (already logged).
+- Singular-value spectra of Q/K/V/O kernels: muon vs adamw arms, at 0/25/50/
+  100% of training (offline script over checkpoints).
+- Money figure: per-layer effective rank at end of training for {SAN+muon,
+  SAN+adamw, SAN-no-gates, FFN-isoP} — Dong et al.'s prediction tested.
 
-### E4 — Boundary conditions: where FFN-free *should* lose (H2)
+## 5. Figures the paper needs (working list)
 
-Same C0 vs C1 pair, finetuned per task:
+1. Val loss vs tokens: SAN vs three FFN matchings (E1).
+2. The H2 heatmap: Δloss by exercise × region (E4).
+3. Scaling: val loss vs non-emb params, both architectures, crossover marked
+   if present (E1 ladder subset — run {tiny, small, base, large} × 2 at 30B).
+4. Rank-vs-depth panel (E7).
+5. Gate trajectories heatmap (layers × training time).
+6. Optimizer×architecture interaction bars (E2).
+7. Downstream table vs Monad/Baguettotron (E6).
 
-- **In-context tasks (predict SAN ≥ FFN):** function calling (ours), extractive QA
-  (SQuAD-style), slot filling (SNIPS/MTOP), RAG-style QA where evidence is in the
-  encoder, synthetic copy/lookup tasks.
-- **Parametric tasks (predict SAN < FFN):** closed-book QA (TriviaQA subset, no
-  context), LAMA-style fact completion, 2–3 digit arithmetic.
-- **Dose-response:** RAG-QA where the gold passage is included with probability p ∈
-  {0, 0.5, 1}. Prediction: the SAN–FFN gap shrinks monotonically as p→1. This is the
-  single most persuasive figure for H2.
+## 6. Infrastructure to build (gap list)
 
-### E5 — Mechanistic analysis (H3)
-
-- **Rank collapse:** effective rank / entropy of token representations per layer, for
-  C0 vs. ablations (no gates, AdamW-only, with FFN). Directly tests Dong et al.'s
-  prediction in our setting.
-- **Gate trajectories:** learned σ(g) per layer over training — which layers sharpen
-  (→1) vs. self-prune (→0). Connects to depth-allocation ablation.
-- **Singular value spectra** of Q/K/V/O with vs. without Muon.
-- **Copy-head evidence:** cross-attention alignment between generated argument-value
-  tokens and their source spans in the query (precision of argmax attention on the
-  copy source). Quantifies "tool calling is retrieval-and-assembly."
-
-### E6 — Tool-set scaling and the contrastive head
-
-- Accuracy vs. number of tools in context: {1, 2, 4, 8, 16, 32, 64} tools, with
-  distractors sampled adversarially (similar names/descriptions).
-- With vs. without contrastive top-k filtering at large tool counts; retrieval R@k
-  (existing `benchmark_retrieval`); end-to-end accuracy of retrieve-then-generate vs.
-  all-tools-in-context, and the latency saved.
-- Irrelevance detection: no-applicable-tool cases (maps to BFCL relevance category).
-
-### E7 — Efficiency on real edge hardware
-
-Claims of 6000/1200 tok/s must become controlled measurements:
-
-- Devices: one iPhone (A17+), one Android mid-tier, one M-series Mac — via Cactus.
-- Metrics: prefill tok/s, decode tok/s, time-to-first-token, peak RSS, energy/query
-  (where measurable), INT4 model size.
-- Baselines at INT4: FunctionGemma-270m, Qwen3-0.6B, LFM2-350m, SmolLM2-360m on
-  llama.cpp/ExecuTorch — same prompts, same device, median of ≥50 runs.
-- KV-cache memory vs. context length: enc-dec fixed cross-KV vs. decoder-only growth.
-- Headline: **accuracy-per-millisecond Pareto frontier** (ties E1 to E7).
-
-### E8 — Public benchmarks and external baselines
-
-- **BFCL v3/v4:** single-turn AST categories (simple, multiple, parallel) +
-  relevance. Near-mandatory for credibility in this subfield.
-- **API-Bank** L1; one of ToolBench/Seal-Tools as a third external set.
-- Baselines evaluated two ways: (a) zero-shot as released, (b) **finetuned on our
-  exact post-train data** — (b) is the fair comparison and the one reviewers trust.
-- Public-data reproducibility run: C0 post-trained only on public data
-  (xLAM-function-calling-60k / Glaive-v2 / ToolACE) so the result doesn't depend on
-  our private Gemini-generated set. Release weights for this variant.
-
----
-
-## 3. Statistical methodology
-
-- 3 seeds per trained config at ablation tier; 5 seeds for headline C0/C1/C5.
-  Mean ± 95% CI everywhere; paired bootstrap (10k resamples) for C0-vs-control deltas
-  on shared test items; report p-values only for headline claims.
-- Fixed data order across configs within a comparison (same shuffle seed).
-- Decoding fixed at greedy + constrained JSON (`model/constrained.py`) for all systems
-  that support it; report unconstrained numbers in appendix.
-- All hyperparameters in appendix; HP budget disclosed: controls C1–C5 get an equal
-  LR sweep (≥5 points) — "we tuned ours and not the baseline" is a desk-reject risk.
-- Release: code, tokenizer, weights, data-gen pipeline, public-data variant, eval
-  harness commit hash.
-
-## 4. What must be built (gap analysis vs. current repo)
-
-| Need | Status |
+| Need | Size |
 |---|---|
-| FFN on/off, d_ff, depth configs | done (`TransformerConfig`) |
-| Decoder-only control (C4/C5) | ~2–3 days work |
-| ReZero/LayerScale residual variants | trivial flag in blocks |
-| AdamW-only / Muon-everywhere | trivial (`optim.py` labels) |
-| Rank/entropy + gate logging | small instrumentation hooks |
-| BFCL/API-Bank adapters | ~1 week (format conversion + scoring) |
-| Boundary-condition task loaders (SQuAD, TriviaQA, SNIPS, synthetic) | ~1–2 weeks |
-| On-device benchmark scripts (Cactus + llama.cpp) | ~1 week |
-| Multi-seed launcher + results DB | ~2–3 days |
+| Residual/norm variant flags (ReZero, standard, RMSNorm, no-QK, sandwich) | small, architecture.py |
+| Per-exercise val sets (filter by `exercise` before packing) | small, data.py + eval.py |
+| Per-region loss slicing (marker ids 4–7 → region masks) | small, eval.py |
+| lm-eval loglikelihood adapter (stub exists in eval.py) | ~2 days |
+| SV-spectra script over checkpoints | small |
+| Multi-run launcher (shell loop over configs × seeds is fine) | trivial |
+| Param/FLOP calculator (one-liner exists; commit as script) | trivial |
 
-## 5. Compute budget (16× TPU v6e reference: 200B-token pretrain ≈ 27 h ≈ 432 chip-h)
+## 7. Statistical methodology
 
-| Tier | Token budget | Cost/run | Runs | Total (chip-h) |
-|---|---|---|---|---|
-| Ablation (E2, E4-small, E3-depth) | 20B | ~43 | ~30 cfg × 3 seeds = 90 | ~3,900 |
-| Scaling (E3) | Chinchilla per size × 2 arch | varies | ~10 | ~2,500 |
-| Headline (C0, C1, C5 @ 200B × 5 seeds) | 200B | ~432 (26M) | 15 | ~6,500 |
-| Post-train/finetune/eval/on-device | 2B each | small | many | ~600 |
-| **Total** | | | | **~13,500 chip-h ≈ 35 days on the 16-chip pod** |
+- 3 seeds for the headline pair; 1 seed + noise-band from headline for
+  ablation cells (upgrade any surprising cell to 3 seeds before believing it).
+- Same data seed across arms within a comparison; val set fixed (seed 3407).
+- Mean ± 95% CI on val loss; paired-by-block bootstrap for Δloss claims.
+- Every hyperparameter in the appendix; E0 sweep results disclosed.
+- Release: code, tokenizer, all E1 checkpoints, wandb logs, eval commit hash.
 
-If that's too much: drop headline seeds to 3, cut scaling to 4 sizes, run E2 at 10B
-tokens → ~8,000 chip-h.
+## 8. Compute budget
 
-## 6. Risks and fallback framings
+hours per run = tokens / (tok_s × 3600), with tok_s read off the first real
+run. At an assumed 3M tok/s for the 24M-param arms:
 
-- **C1 (iso-param FFN) beats C0 on tool calling** → the dispensability claim dies as
-  stated; reframe on the Pareto axis (E7): equal accuracy at 2–3× lower latency/memory.
-  Still publishable, weaker venue fit.
-- **No boundary effect in E4** → H2 dies; paper becomes an efficiency+recipe paper;
-  consider MLSys/EMNLP instead of NeurIPS.
-- **Gated residual ≈ ReZero exactly** → fine; fold into recipe, don't claim novelty.
-- **QAT regularization claim fails in bf16 eval** → keep QAT for deployment only.
-- **Baselines finetuned on our data close the gap** → lean on iso-cost story + E6/E7.
+| Block | Tokens | Node-hours @3M tok/s |
+|---|---|---|
+| E0 LR sweeps | 60B | ~6 |
+| E1 headline + seeds | 840B | ~78 |
+| E2 optimizer 2×2 | 60B | ~6 |
+| E3 ablations | 280B | ~26 |
+| E5 data scaling | 240B | ~22 |
+| E1 scaling ladder (4 sizes × 2 arch × 30B) | 240B | ~30 (larger models slower) |
+| **Total** | **~1.7T** | **~7–10 node-days** |
 
-## 7. Priority order
+Trim path if needed: drop FFN-isoD and the xl ladder point, halve E3 to 10B
+(→ ~5 node-days).
 
-1. **E1 controls (C1, C5) at ablation tier** — if C0 doesn't hold up here, everything
-   else is moot. Do this first, before any infra polish.
-2. E4 dose-response (the H2 figure) at small scale.
-3. E2 ablation grid + E5 rank measurements (H3).
-4. E3 scaling curves.
-5. E8 public benchmarks + baseline finetuning; E7 on-device; headline-tier reruns.
-6. Writing: intro around H1/H2/H3, not around the Needle product.
+## 9. Decision gates and fallbacks
+
+- **Gate after E0+E2 (≈1 day):** if SAN+muon is not within striking distance
+  of FFN-isoP at 30B tokens, stop and diagnose before spending the headline
+  budget. If the gap is architectural (survives LR sweep, all stabilizer
+  ablations), the paper pivots to the honest characterization: *where* the
+  FLOPs/params trade-off lands + H2 decomposition + H3 mechanism. That paper
+  still exists; it's the claim strength that moves.
+- **H2 null (gap uniform across exercises/regions):** drop the
+  routing-vs-storage framing; keep dispensability + trainability.
+- **Gated ≈ ReZero:** expected; fold into recipe.
+- **SAN wins only at iso-FLOP, not iso-param:** report both honestly; the
+  iso-FLOP framing is legitimate (attention FLOPs are cheap on modern HW —
+  cite the wall-clock tok/s parity we measure directly).
+
+## 10. Priority order
+
+1. E0 LR sweeps → lock LRs (read tok_s off these runs to fill §8).
+2. E2 2×2 at 30B — first science, gates the rest.
+3. E1 headline pair (SAN, FFN-isoP) at 105B + E4/E6/E7 evals on checkpoints.
+4. E3 ablations + E1 remaining matchings (isoF, isoD) + scaling ladder.
+5. E5 data scaling.
+6. Writing: intro around H1/H2/H3; Monad/Baguettotron as external anchors.

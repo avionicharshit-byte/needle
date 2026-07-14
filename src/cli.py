@@ -140,7 +140,7 @@ def main():
     p.add_argument("--activation", type=str, default="swiglu", choices=["swiglu", "geglu", "drelu"])
     p.add_argument("--flash", action=argparse.BooleanOptionalAction, default=True,
                    help="Fused attention kernel (cudnn flash on H100). --no-flash for the naive path")
-    p.add_argument("--remat", action=argparse.BooleanOptionalAction, default=False,
+    p.add_argument("--remat", action=argparse.BooleanOptionalAction, default=True,
                    help="Per-layer gradient checkpointing — only needed if activations OOM")
     p.add_argument("--warmup-ratio", type=float, default=0.05)
     p.add_argument("--decay-ratio", type=float, default=0.15)
