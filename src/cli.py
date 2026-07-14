@@ -150,7 +150,10 @@ def main():
     p.add_argument("--save-every", type=int, default=1000,
                    help="Save checkpoint every N steps (default: 1000)")
     p.add_argument("--upload-checkpoints", action="store_true",
-                   help="Upload saved checkpoints to HF hub (default: local only)")
+                   help="Upload checkpoints to HF hub (default: local only). Uploads: "
+                        "rolling ckpt every --upload-every steps, all milestones, final")
+    p.add_argument("--upload-every", type=int, default=10_000,
+                   help="Rolling-checkpoint upload cadence in steps (default: 10000)")
     p.add_argument("--eval-every", type=int, default=500,
                    help="Val loss + gate logging cadence (default: 500)")
     p.add_argument("--val-blocks", type=int, default=16,

@@ -31,8 +31,13 @@ def shard_batch(batch, num_devices):
     return batch.reshape(num_devices, -1, *batch.shape[1:])
 
 
-def _upload_checkpoint(ckpt_path):
-    """Upload a checkpoint file to HuggingFace Hub in a background thread."""
+def _upload_checkpoint(ckpt_path, wait=False):
+    """Upload a checkpoint file to HuggingFace Hub in a background thread.
+
+    wait=True blocks until the upload finishes — required for the final
+    checkpoint, because daemon threads are killed at interpreter exit and a
+    fire-and-forget upload seconds before process end can be truncated.
+    """
     import threading
 
     def _upload():
@@ -52,4 +57,7 @@ def _upload_checkpoint(ckpt_path):
         except Exception as e:
             print(f"[hf] Warning: checkpoint upload failed: {e}")
 
-    threading.Thread(target=_upload, daemon=True).start()
+    t = threading.Thread(target=_upload, daemon=True)
+    t.start()
+    if wait:
+        t.join(timeout=900)

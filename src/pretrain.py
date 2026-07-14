@@ -15,6 +15,7 @@ Usage:
 import math
 import os
 import pickle
+import sys
 import time
 
 import jax
@@ -36,7 +37,7 @@ from .architecture import (
     make_causal_packing_mask,
 )
 from .run import CHECKPOINT_FORMAT_VERSION
-from .optim import create_train_state
+from .optim import _wsd_schedule, create_train_state
 from .distributed import _replicate, _unreplicate, shard_batch, _upload_checkpoint
 
 def _losses(apply_fn, params, tokens, seg_ids):
@@ -64,8 +65,9 @@ def _train_step(state, tokens, seg_ids):
     grads = jax.lax.pmean(grads, axis_name="batch")
     loss = jax.lax.pmean(loss, axis_name="batch")
     ce = jax.lax.pmean(ce, axis_name="batch")
+    grad_norm = optax.global_norm(grads)
     state = state.apply_gradients(grads=grads)
-    return state, loss, ce
+    return state, loss, ce, grad_norm
 
 
 def _val_step(state, tokens, seg_ids):
@@ -203,6 +205,9 @@ def pretrain(args):
     warmup_steps = max(1, int(total_steps * args.warmup_ratio))
     scaled_lr = args.lr * num_devices
     muon_lr = args.muon_lr * math.sqrt(num_devices)
+    # host-side copies of the schedules, for logging only
+    adam_schedule = _wsd_schedule(scaled_lr, total_steps, warmup_steps, args.decay_ratio)
+    muon_schedule = _wsd_schedule(muon_lr, total_steps, warmup_steps, args.decay_ratio)
 
     print(f"\n[3/4] Building val set ({args.val_blocks} blocks)...")
     val_tokens, val_segs, val_docs = build_val_set(
@@ -241,15 +246,34 @@ def pretrain(args):
 
     model = SimpleAttentionNetwork(config)  # host-side apply for rank diagnostics
 
+    try:
+        import subprocess
+        commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                                capture_output=True, text=True, timeout=5).stdout.strip()
+    except Exception:
+        commit = "unknown"
     run_meta = {
         "optimizer": args.optimizer,
         "dataset": args.dataset,
         "seed": args.seed,
         "max_steps": total_steps,
         "no_feedforward": config.no_feedforward,
+        "batch_size": args.batch_size,
+        "num_devices": num_devices,
+        "lr": scaled_lr,
+        "muon_lr": muon_lr,
+        "commit": commit,
+        "argv": " ".join(sys.argv[1:]),
     }
     checkpoint_dir = getattr(args, "checkpoint_dir", "checkpoints")
     os.makedirs(checkpoint_dir, exist_ok=True)
+
+    # Milestone checkpoints for E7 (spectra at 0/25/50/75/100% of training):
+    # kept as separate files, never overwritten. Final save covers 100%.
+    milestone_steps = sorted({max(1, int(total_steps * f)) for f in (0.25, 0.5, 0.75)})
+    if resume_step == 0:
+        _save_checkpoint(state, config, run_meta, checkpoint_dir, args.name, 0,
+                         upload=False, milestone=True)  # init state = the 0% point
 
     decay_steps = max(1, int(total_steps * args.decay_ratio))
     stable_steps = total_steps - warmup_steps - decay_steps
@@ -293,7 +317,7 @@ def pretrain(args):
 
         tokens_b = shard_batch(tokens, num_devices)
         segs_b = shard_batch(segs, num_devices)
-        state, loss, ce = p_train_step(state, tokens_b, segs_b)
+        state, loss, ce, grad_norm = p_train_step(state, tokens_b, segs_b)
 
         loss_val = float(loss[0])
         ce_val = float(ce[0])
@@ -311,6 +335,10 @@ def pretrain(args):
                 "train/loss": loss_val,
                 "train/ce": ce_val,
                 "train/ppl": ppl,
+                "train/grad_norm": float(grad_norm[0]),
+                "train/lr": float(adam_schedule(global_step)),
+                "train/muon_lr": float(muon_schedule(global_step)) if args.optimizer == "muon" else 0.0,
+                "train/tokens": global_step * global_batch_size * seq_len,
                 "train/tokens_per_sec": global_batch_size * seq_len / dt,
                 "train/step": global_step,
             }, step=global_step)
@@ -330,14 +358,20 @@ def pretrain(args):
                 wandb.log(metrics, step=global_step)
 
         if global_step % args.save_every == 0:
+            do_upload = (getattr(args, "upload_checkpoints", False)
+                         and global_step % getattr(args, "upload_every", 10_000) == 0)
             _save_checkpoint(state, config, run_meta, checkpoint_dir, args.name, global_step,
-                             upload=getattr(args, "upload_checkpoints", False))
+                             upload=do_upload)
+        if global_step in milestone_steps:
+            _save_checkpoint(state, config, run_meta, checkpoint_dir, args.name, global_step,
+                             upload=getattr(args, "upload_checkpoints", False), milestone=True)
 
     batch_stream.close()
     pbar.close()
 
     ckpt_path = _save_checkpoint(state, config, run_meta, checkpoint_dir, args.name, global_step,
-                                 upload=getattr(args, "upload_checkpoints", False))
+                                 upload=getattr(args, "upload_checkpoints", False),
+                                 upload_wait=True)
     print(f"\nPretraining complete. {global_step} steps.")
     print(f"Checkpoint: {ckpt_path}")
 
@@ -346,12 +380,18 @@ def pretrain(args):
         wandb.finish()
 
 
-def _save_checkpoint(state, config, run_meta, checkpoint_dir, name, global_step, upload=False):
-    """Save <name>.pkl (format v2), optionally uploading to HF hub."""
+def _save_checkpoint(state, config, run_meta, checkpoint_dir, name, global_step,
+                     upload=False, milestone=False, upload_wait=False):
+    """Save <name>.pkl (format v2), optionally uploading to HF hub.
+
+    milestone=True writes <name>_step<k>.pkl instead — a kept copy that is
+    never overwritten (E7 needs weight snapshots across training).
+    """
     params = _unreplicate(state).params
     params_np = jax.tree.map(lambda x: np.array(x).astype(np.float16), params)
 
-    ckpt_path = os.path.join(checkpoint_dir, f"{name}.pkl")
+    fname = f"{name}_step{global_step}.pkl" if milestone else f"{name}.pkl"
+    ckpt_path = os.path.join(checkpoint_dir, fname)
     with open(ckpt_path, "wb") as f:
         pickle.dump({
             "format_version": CHECKPOINT_FORMAT_VERSION,
@@ -366,5 +406,5 @@ def _save_checkpoint(state, config, run_meta, checkpoint_dir, name, global_step,
     print(f"\n  [step {global_step}] Saved {ckpt_path} ({param_count:,} params, {size_mb:.1f} MB)")
 
     if upload:
-        _upload_checkpoint(ckpt_path)
+        _upload_checkpoint(ckpt_path, wait=upload_wait)
     return ckpt_path

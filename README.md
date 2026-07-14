@@ -1,6 +1,9 @@
 # Simple Attention Networks
 
-We show that MLPs can be completely dropped from transformer networks.
+Can MLPs be dropped from transformer networks entirely? SAN is the
+attention-only arm of a controlled test of that question on reasoning-oriented
+pretraining. Rigorous argument: [theory.md](theory.md). Experiment design:
+[experiments.md](experiments.md).
 
 ```
       ┌───────────────┐
@@ -48,35 +51,63 @@ We show that MLPs can be completely dropped from transformer networks.
 Decoder-only, pretrained on streaming HF datasets (default [PleIAs/SYNTH](https://huggingface.co/datasets/PleIAs/SYNTH)).
 The FFN-equipped standard transformer is the built-in control arm (`--ffn`), and the
 optimizer is switchable (`--optimizer muon|adamw`), so the {muon, adamw} × {ffn, no-ffn}
-2×2 runs from one code path. Experiment design: [docs/neurips_experiment_plan.md](docs/neurips_experiment_plan.md).
+2×2 runs from one code path.
 
 ## Why No FFN
 
-- **Softmax is nonlinear.** `softmax(QK^T/sqrt(d)) * V` is a data-dependent nonlinear mixing operation. For a task that is about routing information (query -> tool alignment), attention is the right primitive.
-- **Tool calling is retrieval-and-assembly.** Match query to tool name, extract argument values, assemble JSON. All three are aligning and copying between input and output -exactly what cross-attention does. No step requires per-position feature transformation (which is what FFN provides).
-- **At small scale, FFN parameters are wasted.** ~2/3 of standard transformer parameters are FFN. For a <50M model on a structured task, those parameters contribute less than more attention layers (deeper cross-attention = better query-tool alignment).
-- **Fewer parameters = faster inference.** FFNs have the biggest GEMM/GEMV dimensions -removing them cuts per-layer parameters by ~2/3, directly reducing the memory bandwidth bottleneck that dominates latency on edge devices.
+- **Attention is a data-dependent linear operator.** `softmax(QKᵀ/√d)·V`
+  nonlinearly *selects* content, then linearly transports it. A SAN layer can
+  route, compare, and copy anything already in context — it cannot synthesize
+  new per-position features. Every nontrivial computation is cross-token
+  (theory.md §2).
+- **Reasoning traces externalize computation into context.** Chain-of-thought
+  moves serial compute from depth to sequence length, and attention consumes
+  sequence-length compute at full strength. Trace-formatted pretraining data
+  (SYNTH) is the regime where the missing FFN should matter least (theory.md §3).
+- **FFNs are the parameter budget.** In our control config (GQA + SwiGLU,
+  d_ff = 4d), FFNs are ~80% of block parameters. If FFNs mainly store
+  parametric knowledge (Geva et al. 2021) and the task's knowledge is in
+  context, those parameters buy depth instead: 20 attention-only layers cost
+  the same as 4 standard blocks (theory.md §4, §6).
 
 ## Gated Residuals
 
 Without FFN, there is no per-position nonlinear rewriting per layer. This makes residual connection design critical.
 
-- **Standard residual** `x = x + Attn(Norm(x))` -attention can only ADD a delta. Without FFN to do the rewriting, purely additive is limiting.
-- **No residual** `x = Attn(Norm(x))` -each layer fully rewrites, but we lose the gradient highway. Deep networks (12+ layers) will not train.
-- **Gated residual (ours)** `x = x + sigmoid(gate) * Attn(Norm(x))` -per-sublayer learnable scalar, initialized to 0. sigmoid(0) = 0.5, so training starts with half-strength residual. The model can learn to sharpen useful layers (g->1) or suppress unhelpful ones (g->0) without losing gradient flow.
+- **No residual** `x = Attn(Norm(x))` — each layer fully rewrites, but the
+  gradient highway is gone; deep stacks will not train.
+- **Standard residual** `x = x + Attn(Norm(x))` — trains, but branch
+  magnitudes are uncontrolled and stream variance grows with depth.
+- **Gated residual (ours)** `x = x + sigmoid(g) * Attn(Norm(x))` — scalar per
+  sublayer, g init 0 → half-strength start. Combined with the 1/√(2N) output
+  init, residual-stream variance stays bounded independent of depth
+  (theory.md §5.2). Layers can sharpen (g→∞) or self-prune (g→−∞) without
+  losing gradient flow. Scalar member of the ReZero/SkipInit/LayerScale
+  family — recipe, not novelty.
 
 ## ZCRMSNorm
 
 - **Standard RMSNorm:** `x * gamma / RMS(x)`, gamma initialized to 1.
 - **ZCRMSNorm:** `x * (1 + gamma) / RMS(x)`, gamma initialized to 0.
-- At init, ZCRMSNorm is identity-up-to-scale. Pairs with gated residuals: the entire block starts as a damped identity + damped normalized attention. No component starts with a strong learned bias.
-- From the nGPT / DeepSeek-V3 line of work. Applied to QK heads as well (QK-norm) for training stability.
+- At init, ZCRMSNorm is a pure RMS normalize (gain exactly 1). Pairs with
+  gated residuals: the whole block starts as a damped identity + damped
+  normalized attention.
+- The real reason for zero-centering: weight decay on γ pulls the gain toward
+  **1 (neutral)**; with the standard parameterization it pulls the gain toward
+  **0 (signal annihilation)**. Zero-centering makes "do nothing" the
+  regularizer's fixed point (theory.md §5.3). Gemma-style RMSNorm offset;
+  also applied per-head to Q/K (QK-norm) to bound attention logits.
 
 ## Muon for Attention-Only
 
 - **Dual optimizer:** Muon (Q/K/V/O projections, LR 0.02, WD 0.01) + AdamW (everything else, LR 3e-4).
-- Without FFN, the model is a deep stack of linear projections with softmax routing. 
-- Muon enforces orthogonality on weight updates via Newton-Schulz, preventing the representation collapse that can happen when stacking many linear layers without interleaving nonlinearities.
+- Muon orthogonalizes weight **updates** (not weights) via Newton–Schulz:
+  every update has a flat singular spectrum.
+- The hypothesis (tested, not assumed): without FFNs the per-token pathway is
+  a deep product of linear maps, where spectrally imbalanced, low-rank updates
+  compound multiplicatively; flat updates keep the composition
+  well-conditioned. Predicted signature: AdamW should hurt the SAN arm more
+  than the FFN arm (theory.md §5.4, predictions P6–P7).
 
 ## Quickstart
 
@@ -147,6 +178,6 @@ train step per {muon, adamw} × {ffn, no-ffn} cell.
   title={Simple Attention Networks},
   author={Henry Ndubuaku},
   year={2026},
-  url={https://github.com/cactus-compute/needle/blob/main/docs/simple_attention_networks.md}
+  url={https://github.com/cactus-compute/needle}
 }
 ```
