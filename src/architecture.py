@@ -44,6 +44,12 @@ class TransformerConfig:
     dtype: str = "bfloat16"
     activation: str = "swiglu"
     no_feedforward: bool = True
+    # flash: fused attention via jax.nn.dot_product_attention (auto backend:
+    # cudnn flash on H100, XLA elsewhere). No (B,H,T,T) score materialization.
+    flash: bool = True
+    # remat: per-layer gradient checkpointing. Only needed when activations
+    # exceed memory (naive attention at long seq_len, or much larger models).
+    remat: bool = False
 
     def __init__(self, **kwargs):
         valid = {f.name for f in self.__dataclass_fields__.values()}
@@ -70,7 +76,9 @@ def apply_rope(x, cos, sin):
     sin = sin[:T][None, None, :, :]
     x1 = x[..., :half]
     x2 = x[..., half:]
-    return jnp.concatenate([x1 * cos - x2 * sin, x2 * cos + x1 * sin], axis=-1)
+    # rotate in f32 (cos/sin), cast back so q/k/v share a dtype — keeps the
+    # fused attention kernel on its bf16 fast path
+    return jnp.concatenate([x1 * cos - x2 * sin, x2 * cos + x1 * sin], axis=-1).astype(x.dtype)
 
 
 class MultiHeadAttention(nn.Module):
@@ -80,6 +88,7 @@ class MultiHeadAttention(nn.Module):
     d_model: int
     num_layers: int
     dtype: jnp.dtype = jnp.bfloat16
+    flash: bool = True
 
     @nn.compact
     def __call__(self, x, mask=None, rope=None):
@@ -98,26 +107,38 @@ class MultiHeadAttention(nn.Module):
         q = ZCRMSNorm(dtype=self.dtype, name="q_norm")(q)
         k = ZCRMSNorm(dtype=self.dtype, name="k_norm")(k)
 
-        repeats = self.num_heads // self.num_kv_heads
-        if repeats > 1:
-            k = jnp.repeat(k, repeats, axis=1)
-            v = jnp.repeat(v, repeats, axis=1)
-
         if rope is not None:
             cos, sin = rope
             q = apply_rope(q, cos, sin)
             k = apply_rope(k, cos, sin)
 
-        scale = jnp.sqrt(jnp.float32(head_dim))
-        attn_weights = jnp.matmul(q, k.transpose(0, 1, 3, 2)) / scale
+        if self.flash:
+            # (B, T, N, H) layout; GQA handled natively (no k/v repeat) and no
+            # (B, H, T, T) score materialization on backends with fused kernels.
+            out = jax.nn.dot_product_attention(
+                q.transpose(0, 2, 1, 3),
+                k.transpose(0, 2, 1, 3),
+                v.transpose(0, 2, 1, 3),
+                mask=mask,
+            )
+            out = out.reshape(B, -1, self.d_model)
+        else:
+            repeats = self.num_heads // self.num_kv_heads
+            if repeats > 1:
+                k = jnp.repeat(k, repeats, axis=1)
+                v = jnp.repeat(v, repeats, axis=1)
 
-        if mask is not None:
-            attn_weights = jnp.where(mask, attn_weights, jnp.finfo(attn_weights.dtype).min)
+            scale = jnp.sqrt(jnp.float32(head_dim))
+            attn_weights = jnp.matmul(q, k.transpose(0, 1, 3, 2)) / scale
 
-        attn_weights = nn.softmax(attn_weights, axis=-1)
+            if mask is not None:
+                attn_weights = jnp.where(mask, attn_weights, jnp.finfo(attn_weights.dtype).min)
 
-        out = jnp.matmul(attn_weights, v)
-        out = out.transpose(0, 2, 1, 3).reshape(B, -1, self.d_model)
+            attn_weights = nn.softmax(attn_weights, axis=-1)
+
+            out = jnp.matmul(attn_weights, v)
+            out = out.transpose(0, 2, 1, 3).reshape(B, -1, self.d_model)
+
         return nn.Dense(self.d_model, dtype=self.dtype, use_bias=False, kernel_init=residual_init(self.num_layers), name="out_proj")(out)
 
 
@@ -155,13 +176,14 @@ class Block(nn.Module):
     dtype: jnp.dtype = jnp.bfloat16
     activation: str = "swiglu"
     no_feedforward: bool = True
+    flash: bool = True
 
     @nn.compact
     def __call__(self, x, mask=None, rope=None):
         attn_gate = nn.sigmoid(self.param("attn_gate", jinit.zeros, ())).astype(self.dtype)
         residual = x
         x = ZCRMSNorm(dtype=self.dtype)(x)
-        x = MultiHeadAttention(self.num_heads, self.num_kv_heads, self.d_model, self.num_layers, self.dtype, name="self_attn")(
+        x = MultiHeadAttention(self.num_heads, self.num_kv_heads, self.d_model, self.num_layers, self.dtype, self.flash, name="self_attn")(
             x, mask=mask, rope=rope
         )
         x = residual + attn_gate * x
@@ -191,6 +213,7 @@ class _ScanBody(nn.Module):
     dtype: jnp.dtype = jnp.bfloat16
     activation: str = "swiglu"
     no_feedforward: bool = True
+    flash: bool = True
     collect_hidden: bool = False
 
     @nn.compact
@@ -199,7 +222,7 @@ class _ScanBody(nn.Module):
         x = Block(
             self.num_heads, self.num_kv_heads, self.d_model, self.d_ff,
             self.num_layers, self.dtype, self.activation, self.no_feedforward,
-            name="block",
+            self.flash, name="block",
         )(x, mask=mask, rope=rope)
         return (x, mask, rope), (x if self.collect_hidden else None)
 
@@ -214,8 +237,9 @@ class Stack(nn.Module):
         dt = cfg.jax_dtype
         x = x.astype(dt)
 
+        body = nn.remat(_ScanBody) if cfg.remat else _ScanBody
         ScanBlock = nn.scan(
-            nn.remat(_ScanBody),
+            body,
             variable_axes={"params": 0},
             split_rngs={"params": True},
             length=cfg.num_layers,
@@ -223,7 +247,7 @@ class Stack(nn.Module):
         (x, _, _), hidden = ScanBlock(
             cfg.num_heads, cfg.num_kv_heads, cfg.d_model, cfg.d_ff,
             cfg.num_layers, dt, cfg.activation, cfg.no_feedforward,
-            collect_hidden, name="layers",
+            cfg.flash, collect_hidden, name="layers",
         )((x, mask, rope), None)
 
         x = ZCRMSNorm(dtype=dt, name="final_norm")(x)

@@ -37,8 +37,6 @@ def _install_xla_log_filter():
         return
     _log_filter_installed = True
 
-    # 1. Dup the original stderr fd; rebind Python's sys.stderr to it so
-    #    all Python-level writes bypass the pipe.
     py_stderr_fd = os.dup(2)
     try:
         sys.stderr.flush()
@@ -47,12 +45,8 @@ def _install_xla_log_filter():
     sys.stderr = os.fdopen(py_stderr_fd, "w", encoding="utf-8",
                            errors="replace", buffering=1)
 
-    # 2. Dup another copy for the filter thread to write filtered C-level
-    #    output to.
-    out_fd = os.dup(2)  # before dup2 below, fd 2 is still the real terminal
+    out_fd = os.dup(2) 
 
-    # 3. Redirect fd 2 to the write end of a new pipe. All C-level writes
-    #    from XLA now land in the pipe.
     r_fd, w_fd = os.pipe()
     os.dup2(w_fd, 2)
     os.close(w_fd)
@@ -96,10 +90,12 @@ def _install_xla_log_filter():
 
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
-# NVLink SHARP multicast needs Fabric Manager access that containerized nodes
-# (e.g. RunPod) don't expose — NCCL init dies with CUDA error 401. Our
-# all-reduces are tiny at <100M params, so NVLS buys nothing anyway.
 os.environ.setdefault("NCCL_NVLS_ENABLE", "0")
+      
+if "latency_hiding_scheduler" not in os.environ.get("XLA_FLAGS", ""):
+    os.environ["XLA_FLAGS"] = (
+        os.environ.get("XLA_FLAGS", "") + " --xla_gpu_enable_latency_hiding_scheduler=true"
+    ).strip()
 _install_xla_log_filter()
 
 def main():
@@ -142,6 +138,10 @@ def main():
     p.add_argument("--d-ff", type=int, default=None,
                    help="FFN width when --ffn (default: 4*d_model)")
     p.add_argument("--activation", type=str, default="swiglu", choices=["swiglu", "geglu", "drelu"])
+    p.add_argument("--flash", action=argparse.BooleanOptionalAction, default=True,
+                   help="Fused attention kernel (cudnn flash on H100). --no-flash for the naive path")
+    p.add_argument("--remat", action=argparse.BooleanOptionalAction, default=False,
+                   help="Per-layer gradient checkpointing — only needed if activations OOM")
     p.add_argument("--warmup-ratio", type=float, default=0.05)
     p.add_argument("--decay-ratio", type=float, default=0.15)
     p.add_argument("--wandb", action="store_true")

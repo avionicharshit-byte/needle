@@ -88,6 +88,29 @@ def stream_texts(spec, seed=42, shuffle=True, skip=0, take=None):
             yield text
 
 
+def _encode_stream(tokenizer, texts, workers=8, ahead=256):
+    """Tokenize documents with a sliding window of worker threads.
+
+    SentencePiece's Encode releases the GIL, so threads give real parallelism.
+    Results yield in submission order, so output is deterministic regardless
+    of thread timing.
+    """
+    from collections import deque
+    from concurrent.futures import ThreadPoolExecutor
+
+    executor = ThreadPoolExecutor(max_workers=workers)
+    pending = deque()
+    try:
+        for text in texts:
+            pending.append(executor.submit(tokenizer.encode, text))
+            if len(pending) >= ahead:
+                yield pending.popleft().result()
+        while pending:
+            yield pending.popleft().result()
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
 def _pack_rows(tokenizer, texts, batch_size, seq_len):
     """Pack a text stream into (tokens[B, T+1], seg_ids[B, T+1]) int32 batches.
 
@@ -99,8 +122,8 @@ def _pack_rows(tokenizer, texts, batch_size, seq_len):
     cur_t, cur_s = [], []
     seg = 0
 
-    for text in texts:
-        ids = [BOS_ID] + tokenizer.encode(text) + [EOS_ID]
+    for doc_ids in _encode_stream(tokenizer, texts):
+        ids = [BOS_ID] + doc_ids + [EOS_ID]
         pos = 0
         while pos < len(ids):
             if not cur_t:

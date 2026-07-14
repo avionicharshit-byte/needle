@@ -150,3 +150,23 @@ def test_train_state_step(optimizer, no_ffn):
         new_state = new_state.apply_gradients(grads=grads)
     moved = jax.tree.map(lambda a, b: bool(jnp.any(a != b)), state.params, new_state.params)
     assert any(jax.tree.leaves(moved))
+
+
+def test_flash_matches_naive():
+    """Fused attention path must be numerically equivalent to the naive path."""
+    params = init_model(tiny_config(dtype="float32", flash=False))[1]
+    tokens = jnp.arange(2 * 16, dtype=jnp.int32).reshape(2, 16) % 64
+    logits_naive = SimpleAttentionNetwork(tiny_config(dtype="float32", flash=False)).apply(
+        {"params": params}, tokens)
+    logits_flash = SimpleAttentionNetwork(tiny_config(dtype="float32", flash=True)).apply(
+        {"params": params}, tokens)
+    np.testing.assert_allclose(np.asarray(logits_naive), np.asarray(logits_flash), rtol=2e-4, atol=2e-4)
+
+
+def test_remat_matches():
+    """Gradient checkpointing must not change the forward computation."""
+    params = init_model(tiny_config(dtype="float32", remat=False))[1]
+    tokens = jnp.arange(2 * 16, dtype=jnp.int32).reshape(2, 16) % 64
+    a = SimpleAttentionNetwork(tiny_config(dtype="float32", remat=False)).apply({"params": params}, tokens)
+    b = SimpleAttentionNetwork(tiny_config(dtype="float32", remat=True)).apply({"params": params}, tokens)
+    np.testing.assert_allclose(np.asarray(a), np.asarray(b), rtol=1e-6, atol=1e-6)

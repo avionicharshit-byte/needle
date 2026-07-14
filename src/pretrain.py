@@ -188,6 +188,8 @@ def pretrain(args):
             dtype=args.dtype,
             activation=args.activation,
             no_feedforward=not args.ffn,
+            flash=getattr(args, "flash", True),
+            remat=getattr(args, "remat", False),
         )
 
     assert config.vocab_size == tokenizer.vocab_size, (
@@ -278,7 +280,7 @@ def pretrain(args):
         lambda: packed_block_stream(tokenizer, spec, global_batch_size, seq_len,
                                     seed=stream_seed, skip_docs=val_docs,
                                     max_docs=getattr(args, "max_docs", None)),
-        prefetch=8,
+        prefetch=32,
     )
 
     global_step = resume_step
