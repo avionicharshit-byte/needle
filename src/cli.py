@@ -96,6 +96,10 @@ def _install_xla_log_filter():
 
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
+# NVLink SHARP multicast needs Fabric Manager access that containerized nodes
+# (e.g. RunPod) don't expose — NCCL init dies with CUDA error 401. Our
+# all-reduces are tiny at <100M params, so NVLS buys nothing anyway.
+os.environ.setdefault("NCCL_NVLS_ENABLE", "0")
 _install_xla_log_filter()
 
 def main():
