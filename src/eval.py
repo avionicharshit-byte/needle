@@ -6,10 +6,10 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 
-from ..dataset.tokenizer import get_tokenizer
-from ..dataset.pretraining import resolve_dataset, build_val_set
-from ..model.architecture import SimpleAttentionNetwork, make_causal_packing_mask
-from ..model.run import load_checkpoint, generate
+from .tokenizer import get_tokenizer
+from .pretraining import resolve_dataset, build_val_set
+from .architecture import SimpleAttentionNetwork, make_causal_packing_mask
+from .run import load_checkpoint, generate
 
 _val_loss_fn_cache = {}
 

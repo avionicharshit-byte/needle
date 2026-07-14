@@ -2,8 +2,8 @@
 # Launch multi-host training on all TPU workers.
 # Run this from your LOCAL machine (not from the TPU VM).
 #
-# Usage: ./launch_train.sh [extra needle train args...]
-# Example: ./launch_train.sh --epochs 3 --wandb --batch-size 64
+# Usage: ./launch_train.sh [extra needle pretrain args...]
+# Example: ./launch_train.sh --wandb --batch-size 64 --max-steps 100000
 
 set -euo pipefail
 
@@ -34,5 +34,5 @@ gcloud compute tpus tpu-vm ssh "$TPU_NAME" \
 echo "[launch] Starting training on all workers..."
 gcloud compute tpus tpu-vm ssh "$TPU_NAME" \
   --zone="$ZONE" --project="$PROJECT" --worker=all \
-  --command="cd ~/needle && .venv/bin/needle train $TRAIN_ARGS" \
+  --command="cd ~/needle && .venv/bin/needle pretrain $TRAIN_ARGS" \
   2>&1

@@ -4,7 +4,7 @@ import sys
 import jax
 import jax.numpy as jnp
 
-from ..dataset.tokenizer import get_tokenizer, BOS_ID, EOS_ID, PAD_ID
+from .tokenizer import get_tokenizer, BOS_ID, EOS_ID, PAD_ID
 from .architecture import SimpleAttentionNetwork, TransformerConfig
 
 CHECKPOINT_FORMAT_VERSION = 2

@@ -238,21 +238,21 @@ def main():
         import jax
         if os.path.exists("/dev/accel0"):
             jax.distributed.initialize()
-        from .training.pretrain import pretrain
+        from .pretrain import pretrain
         pretrain(args)
     elif args.command == "tokenizer-train":
-        from .dataset.tokenizer import train_tokenizer
+        from .tokenizer import train_tokenizer
         train_tokenizer(
             dataset=args.dataset, text_field=args.text_field,
             vocab_size=args.vocab_size, max_docs=args.max_docs,
             force=args.force, upload=args.upload,
         )
     elif args.command == "sample":
-        from .model.run import main as run_main
+        from .run import main as run_main
         run_main(args)
     elif args.command == "eval":
-        from .training.eval import main as eval_main_fn
+        from .eval import main as eval_main_fn
         eval_main_fn(args)
     elif args.command == "tpu":
-        from .utils.tpu import tpu_dispatch
+        from .tpu import tpu_dispatch
         tpu_dispatch(args)

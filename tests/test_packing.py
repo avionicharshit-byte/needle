@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
 
-from needle.dataset.pretraining import _pack_rows
-from needle.dataset.tokenizer import BOS_ID, EOS_ID
+from src.pretraining import _pack_rows
+from src.tokenizer import BOS_ID, EOS_ID
 
 
 class FakeTokenizer:

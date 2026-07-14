@@ -22,21 +22,21 @@ import numpy as np
 import optax
 from tqdm import tqdm
 
-from ..dataset.tokenizer import get_tokenizer
-from ..dataset.pretraining import (
+from .tokenizer import get_tokenizer
+from .pretraining import (
     PrefetchStream,
     build_val_set,
     packed_block_stream,
     resolve_dataset,
 )
-from ..model.architecture import (
+from .architecture import (
     SimpleAttentionNetwork,
     TransformerConfig,
     make_causal_packing_mask,
 )
-from ..model.run import CHECKPOINT_FORMAT_VERSION
+from .run import CHECKPOINT_FORMAT_VERSION
 from .optim import create_train_state
-from ..utils.distributed import _replicate, _unreplicate, shard_batch, _upload_checkpoint
+from .distributed import _replicate, _unreplicate, shard_batch, _upload_checkpoint
 
 _HF_CHECKPOINT_REPO = "Cactus-Compute/checkpoints"
 

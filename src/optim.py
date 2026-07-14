@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 import optax
 from flax.training import train_state
-from ..model.architecture import SimpleAttentionNetwork
+from .architecture import SimpleAttentionNetwork
 
 
 def _newton_schulz(G, steps=5):

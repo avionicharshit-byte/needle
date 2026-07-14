@@ -3,13 +3,13 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from needle.model.architecture import (
+from src.architecture import (
     SimpleAttentionNetwork,
     TransformerConfig,
     make_causal_mask,
     make_causal_packing_mask,
 )
-from needle.training.optim import create_train_state, _param_labels
+from src.optim import create_train_state, _param_labels
 
 
 def tiny_config(**overrides):

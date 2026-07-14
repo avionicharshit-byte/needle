@@ -2,12 +2,11 @@ import os
 
 import sentencepiece as spm
 
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
-TOKENIZER_DIR = os.path.join(_PROJECT_ROOT, "tokenizer")
-
-# The artifact is named needle_lm (not needle) on purpose: the old tool-calling
-# tokenizer ships as needle.model on dev machines and on HF, and must never be
-# silently picked up by this branch — its vocab was fit to tool-call JSON.
+# Artifacts live flat next to the code. The artifact is named needle_lm (not
+# needle) on purpose: the old tool-calling tokenizer ships as needle.model on
+# dev machines and on HF, and must never be silently picked up by this branch —
+# its vocab was fit to tool-call JSON.
+TOKENIZER_DIR = os.path.dirname(__file__)
 TOKENIZER_PREFIX = os.path.join(TOKENIZER_DIR, "needle_lm")
 
 PAD_ID = 0
