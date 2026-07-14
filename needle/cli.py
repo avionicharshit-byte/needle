@@ -109,46 +109,6 @@ def main():
     parser = argparse.ArgumentParser(prog="needle", add_help=False)
     sub = parser.add_subparsers(dest="command")
 
-    p = sub.add_parser("train", add_help=False)
-    p.add_argument("--name", type=str, default="baseline",
-                   help="Experiment name for checkpoints and wandb (default: baseline)")
-    p.add_argument("--checkpoint", type=str, default=None,
-                   help="Full resume: adopts checkpoint's config and step counter")
-    p.add_argument("--init-from", type=str, default=None,
-                   help="Initialize params from a pretrained base on HF "
-                        "(e.g. needle_base.pkl). Uses CLI config; partial-loads "
-                        "matching params, random-inits the rest.")
-    p.add_argument("--epochs", type=int, default=1)
-    p.add_argument("--batch-size", type=int, default=64)
-    p.add_argument("--lr", type=float, default=3e-5)
-    p.add_argument("--muon-lr", type=float, default=0.02)
-    p.add_argument("--d-model", type=int, default=512)
-    p.add_argument("--num-heads", type=int, default=8)
-    p.add_argument("--num-kv-heads", type=int, default=4)
-    p.add_argument("--num-layers", type=int, default=12)
-    p.add_argument("--num-dec-layers", type=int, default=8)
-    p.add_argument("--max-enc-len", type=int, default=DEFAULT_MAX_ENC_LEN)
-    p.add_argument("--max-dec-len", type=int, default=DEFAULT_MAX_DEC_LEN)
-    p.add_argument("--max-samples", type=int, default=None)
-    p.add_argument("--warmup-ratio", type=float, default=0.05)
-    p.add_argument("--decay-ratio", type=float, default=0.05)
-    p.add_argument("--wandb", action="store_true")
-    p.add_argument("--dtype", type=str, default="bfloat16", choices=["float32", "bfloat16"])
-    p.add_argument("--checkpoint-dir", type=str, default="checkpoints")
-    p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--eval-every", type=int, default=1000)
-    p.add_argument("--max-eval-samples", type=int, default=5000)
-    p.add_argument("--contrastive-weight", type=float, default=0.1,
-                   help="Weight for CLIP-style contrastive loss (default: 0.1)")
-    p.add_argument("--contrastive-dim", type=int, default=128,
-                   help="Dimension of contrastive projection head (default: 128)")
-    p.add_argument("--w-name", type=float, default=2.0,
-                   help="Loss weight for tool name tokens (default: 2.0)")
-    p.add_argument("--w-value", type=float, default=4.0,
-                   help="Loss weight for argument value tokens (default: 4.0)")
-    p.add_argument("--w-key", type=float, default=1.5,
-                   help="Loss weight for argument key tokens (default: 1.5)")
-
     p = sub.add_parser("pretrain", add_help=False)
     p.add_argument("--name", type=str, default="pretrain",
                    help="Experiment name for wandb (default: pretrain)")
@@ -178,18 +138,6 @@ def main():
                    help="Save and upload checkpoint every N steps (default: 1000)")
     p.add_argument("--checkpoint-dir", type=str, default="checkpoints")
 
-    p = sub.add_parser("tokenize", add_help=False)
-    p.add_argument("--max-samples", type=int, default=None,
-                   help="Limit samples per split (for dev/test)")
-    p.add_argument("--max-enc-len", type=int, default=DEFAULT_MAX_ENC_LEN,
-                   help=f"Max encoder sequence length (default: {DEFAULT_MAX_ENC_LEN})")
-    p.add_argument("--max-dec-len", type=int, default=DEFAULT_MAX_DEC_LEN,
-                   help=f"Max decoder sequence length (default: {DEFAULT_MAX_DEC_LEN})")
-    p.add_argument("--shuffle-tools", action=argparse.BooleanOptionalAction, default=True,
-                   help="Shuffle tool order in encoder input (default: True)")
-    p.add_argument("--max-tool-len", type=int, default=256,
-                   help="Max token length for individual tool descriptions (default: 256)")
-
     p = sub.add_parser("run", add_help=False)
     p.add_argument("--checkpoint", type=str, required=True)
     p.add_argument("--query", type=str, default=None, help="Query text for tool-call generation")
@@ -211,37 +159,6 @@ def main():
     p.add_argument("--throughput-runs", type=int, default=10)
     p.add_argument("--no-constrained", action="store_true",
                    help="Disable grammar-constrained decoding for tool names/arg keys")
-
-    p = sub.add_parser("generate-data", add_help=False)
-    p.add_argument("--num-samples", type=int, default=500, help="Number of samples to generate")
-    p.add_argument("--batch-size", type=int, default=25, help="Examples per Gemini call")
-    p.add_argument("--workers", type=int, default=8, help="Parallel Gemini calls")
-    p.add_argument("--model", type=str, default=None, help="Gemini model override")
-    p.add_argument("--dry-run", action="store_true", help="Generate only, skip save and upload")
-    p.add_argument("--output-jsonl", type=str, default=None, help="Also save raw generations to JSONL")
-    p.add_argument("--upload-every", type=int, default=None, help="Merge+upload every N samples")
-
-    p = sub.add_parser("evaluate", add_help=False)
-    p.add_argument("--checkpoint", type=str, required=True)
-    p.add_argument("--benchmarks", type=str, nargs="*",
-                   choices=["wikitext2", "lambada", "hellaswag", "arc_easy"])
-    p.add_argument("--max-samples", type=int, default=500)
-
-    p = sub.add_parser("finetune", add_help=False)
-    p.add_argument("jsonl_path", type=str, help="Path to JSONL training data")
-    p.add_argument("--checkpoint", type=str, default=None,
-                   help="Base model checkpoint (auto-downloads from HuggingFace if omitted)")
-    p.add_argument("--epochs", type=int, default=1)
-    p.add_argument("--batch-size", type=int, default=64)
-    p.add_argument("--checkpoint-dir", type=str, default="checkpoints")
-    p.add_argument("--cache-dir", type=str, default=None)
-    p.add_argument("--max-enc-len", type=int, default=None)
-    p.add_argument("--max-dec-len", type=int, default=None)
-
-    p = sub.add_parser("playground", add_help=False)
-    p.add_argument("--checkpoint", type=str, default=None)
-    p.add_argument("--port", type=int, default=7860)
-    p.add_argument("--host", type=str, default="127.0.0.1")
 
     p = sub.add_parser("tpu", add_help=False)
     tpu_sub = p.add_subparsers(dest="tpu_action")
@@ -265,12 +182,6 @@ def main():
     tp = tpu_sub.add_parser("sync", add_help=False)
     tp.add_argument("name", type=str)
     tp.add_argument("--zone", type=str, default=None)
-
-    tp = tpu_sub.add_parser("train", add_help=False)
-    tp.add_argument("name", type=str)
-    tp.add_argument("--zone", type=str, default=None)
-    tp.add_argument("train_args", nargs=argparse.REMAINDER,
-                    help="Extra args passed to needle train")
 
     tp = tpu_sub.add_parser("pretrain", add_help=False)
     tp.add_argument("name", type=str)
@@ -302,40 +213,18 @@ def main():
         print(HELP)
         sys.exit(0)
 
-    if args.command == "tokenize":
-        from .dataset.tokenize import tokenize
-        tokenize(args)
-    elif args.command == "pretrain":
+    if args.command == "pretrain":
         import jax
         if os.path.exists("/dev/accel0"):
             jax.distributed.initialize()
         from .training.pretrain import pretrain
         pretrain(args)
-    elif args.command == "train":
-        import jax
-        if os.path.exists("/dev/accel0"):
-            jax.distributed.initialize()
-        from .training.train import train
-        train(args)
     elif args.command == "run":
         from .model.run import main as run_main
         run_main(args)
     elif args.command == "eval":
         from .training.eval import main as eval_main_fn
         eval_main_fn(args)
-    elif args.command == "generate-data":
-        from .dataset.generate import main as gendata_main, MODEL as _MODEL, UPLOAD_EVERY as _UE
-        if args.model is None:
-            args.model = _MODEL
-        if args.upload_every is None:
-            args.upload_every = _UE
-        gendata_main(args)
-    elif args.command == "finetune":
-        from .training.finetune import finetune_local
-        finetune_local(args)
-    elif args.command == "playground":
-        from .ui.server import main as ui_main
-        ui_main(args)
     elif args.command == "tpu":
         from .utils.tpu import tpu_dispatch
         tpu_dispatch(args)

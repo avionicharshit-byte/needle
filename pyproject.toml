@@ -9,13 +9,9 @@ dependencies = [
     "optax",
     "datasets",
     "huggingface_hub",
-    "transformers",
     "wandb",
     "sentencepiece",
-    "scipy",
-    "gcsfs",
     "tqdm",
-    "google-genai",
 ]
 
 [project.optional-dependencies]

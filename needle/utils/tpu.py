@@ -75,7 +75,6 @@ TPU_HELP = """
     needle tpu connect NAME [--zone ZONE]
     needle tpu setup NAME [--zone ZONE]    setup all workers (multi-host)
     needle tpu sync NAME [--zone ZONE]     sync code only (fast, no venv rebuild)
-    needle tpu train NAME [--zone ZONE]    launch training on all workers
     needle tpu pretrain NAME [--zone ZONE] launch pretraining on all workers
     needle tpu claude NAME [--zone ZONE]
     needle tpu stop NAME [--zone ZONE]
@@ -633,11 +632,6 @@ def _tpu_run_command(args, needle_cmd="train"):
               file=sys.stderr)
 
 
-def tpu_train(args):
-    """Launch 'needle train' on all workers."""
-    _tpu_run_command(args, needle_cmd="train")
-
-
 def tpu_pretrain(args):
     """Launch 'needle pretrain' on all workers."""
     _tpu_run_command(args, needle_cmd="pretrain")
@@ -651,7 +645,6 @@ def tpu_dispatch(args):
         "connect": tpu_connect,
         "setup": tpu_setup,
         "sync": tpu_sync,
-        "train": tpu_train,
         "pretrain": tpu_pretrain,
         "claude": tpu_claude,
         "stop": tpu_stop,
