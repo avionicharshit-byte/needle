@@ -77,6 +77,22 @@ if command -v nvidia-smi &>/dev/null && nvidia-smi &>/dev/null; then
     export JAX_COMPILATION_CACHE_DIR="$HOME/.cache/jax"
     export XLA_PYTHON_CLIENT_MEM_FRACTION=0.95
     mkdir -p "$JAX_COMPILATION_CACHE_DIR"
+
+    # Container images (RunPod etc.) set LD_LIBRARY_PATH to their own CUDA,
+    # which shadows the pip CUDA wheels — JAX then fails with "Unable to load
+    # cuSPARSE" and silently falls back to CPU. Prepend the pip wheel lib dirs,
+    # and persist the fix into the venv activate script.
+    NVIDIA_LIBS=$(python -c "import glob,sysconfig,os; print(':'.join(sorted(glob.glob(os.path.join(sysconfig.get_paths()['purelib'],'nvidia','*','lib')))))")
+    if [ -n "$NVIDIA_LIBS" ]; then
+        export LD_LIBRARY_PATH="$NVIDIA_LIBS${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+        if ! grep -q "pip CUDA wheels" "$VENV_DIR/bin/activate"; then
+            {
+                echo ""
+                echo "# pip CUDA wheels must win over the container CUDA (jax cuSPARSE load)"
+                echo "export LD_LIBRARY_PATH=\"$NVIDIA_LIBS\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}\""
+            } >> "$VENV_DIR/bin/activate"
+        fi
+    fi
 else
     echo "No GPU detected. Installing CPU-only jax..."
     pip install -U jax
