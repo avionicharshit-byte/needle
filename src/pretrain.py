@@ -28,6 +28,8 @@ from .tokenizer import HF_REPO, get_tokenizer
 from .data import (
     PrefetchStream,
     build_val_set,
+    memmap_block_stream,
+    memmap_val_set,
     packed_block_stream,
     resolve_dataset,
 )
@@ -209,11 +211,18 @@ def pretrain(args):
     adam_schedule = _wsd_schedule(scaled_lr, total_steps, warmup_steps, args.decay_ratio)
     muon_schedule = _wsd_schedule(muon_lr, total_steps, warmup_steps, args.decay_ratio)
 
+    data_dir = getattr(args, "data_dir", None)
     print(f"\n[3/4] Building val set ({args.val_blocks} blocks)...")
-    val_tokens, val_segs, val_docs = build_val_set(
-        tokenizer, spec, args.val_blocks, global_batch_size, seq_len
-    )
-    print(f"      {val_docs:,} docs held out from the stream head")
+    if data_dir:
+        val_tokens, val_segs = memmap_val_set(data_dir, args.val_blocks,
+                                              global_batch_size, seq_len)
+        val_docs = 0  # memmap path holds out a fixed val pool by doc index
+        print(f"      from memmap corpus at {data_dir} (fixed val pool)")
+    else:
+        val_tokens, val_segs, val_docs = build_val_set(
+            tokenizer, spec, args.val_blocks, global_batch_size, seq_len
+        )
+        print(f"      {val_docs:,} docs held out from the stream head")
 
     print(f"\n[4/4] Initializing model...")
     rng = jax.random.PRNGKey(args.seed)
@@ -300,12 +309,20 @@ def pretrain(args):
 
     # Fresh data ordering on resume (avoid re-seeing pre-crash examples)
     stream_seed = args.seed + resume_step
-    batch_stream = PrefetchStream(
-        lambda: packed_block_stream(tokenizer, spec, global_batch_size, seq_len,
-                                    seed=stream_seed, skip_docs=val_docs,
-                                    max_docs=getattr(args, "max_docs", None)),
-        prefetch=32,
-    )
+    if data_dir:
+        batch_stream = PrefetchStream(
+            lambda: memmap_block_stream(data_dir, global_batch_size, seq_len,
+                                        seed=stream_seed,
+                                        max_docs=getattr(args, "max_docs", None)),
+            prefetch=32,
+        )
+    else:
+        batch_stream = PrefetchStream(
+            lambda: packed_block_stream(tokenizer, spec, global_batch_size, seq_len,
+                                        seed=stream_seed, skip_docs=val_docs,
+                                        max_docs=getattr(args, "max_docs", None)),
+            prefetch=32,
+        )
 
     global_step = resume_step
     pbar = tqdm(desc="Pretrain", total=total_steps, initial=resume_step)

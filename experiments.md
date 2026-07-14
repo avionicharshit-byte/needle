@@ -132,6 +132,9 @@ All commands assume the 8-GPU node with defaults `--batch-size 64
 --seq-len 2048` → ~1.05M tokens/step, so steps ≈ tokens/1.05M (5B→5k steps,
 20B→20k, 30B→30k, 105B→100k). Runs execute sequentially (each saturates the
 node). Training runs that feed E7 carry `--log-rank-every 2500`.
+Once the pre-tokenized corpus exists (`san tokenize-corpus`, one-time),
+append `--data-dir /workspace/data/synth` to every pretrain command —
+faster input path, exact global shuffle, no HF dependence mid-run.
 Arm shorthands: SAN = defaults; FFN-isoP = `--ffn --num-layers 4`;
 FFN-isoF = `--ffn --num-layers 9`; FFN-isoD = `--ffn --num-layers 20`.
 

@@ -113,6 +113,9 @@ def main():
                    help="Registry name (synth, fineweb-edu) or any HF repo id (default: synth)")
     p.add_argument("--text-field", type=str, default=None,
                    help="Text field name for ad-hoc HF datasets (default: text)")
+    p.add_argument("--data-dir", type=str, default=None,
+                   help="Pre-tokenized memmap corpus dir (from `san tokenize-corpus`). "
+                        "When set, replaces HF streaming: faster, exact global shuffle")
     p.add_argument("--checkpoint", type=str, default=None,
                    help="Resume from a format-v2 checkpoint")
     p.add_argument("--resume-step", type=int, default=None,
@@ -162,6 +165,24 @@ def main():
                    help="Representation-rank logging cadence, 0 = off (default: 0)")
     p.add_argument("--checkpoint-dir", type=str, default="checkpoints")
 
+    p = sub.add_parser("tokenize-corpus", add_help=False)
+    p.add_argument("--dataset", type=str, default="synth")
+    p.add_argument("--text-field", type=str, default=None)
+    p.add_argument("--out-dir", type=str, default=None,
+                   help="Output dir (default: data/<dataset>). Use the network "
+                        "volume, e.g. /workspace/data/synth, so it survives pod loss")
+    p.add_argument("--max-files", type=int, default=None,
+                   help="Only process the first N parquet shards (smoke test)")
+    p.add_argument("--force", action="store_true",
+                   help="Discard existing progress and restart from scratch")
+    p.add_argument("--upload", action="store_true",
+                   help="After tokenizing, upload the corpus to HF (split into 10GB parts)")
+
+    p = sub.add_parser("download-corpus", add_help=False)
+    p.add_argument("--dataset", type=str, default="synth")
+    p.add_argument("--out-dir", type=str, default=None,
+                   help="Destination dir (default: data/<dataset>)")
+
     p = sub.add_parser("tokenizer-train", add_help=False)
     p.add_argument("--dataset", type=str, default="synth")
     p.add_argument("--text-field", type=str, default=None)
@@ -201,6 +222,17 @@ def main():
     if args.command == "pretrain":
         from .pretrain import pretrain
         pretrain(args)
+    elif args.command == "tokenize-corpus":
+        from .data import tokenize_corpus, upload_corpus
+        out = tokenize_corpus(
+            dataset=args.dataset, text_field=args.text_field,
+            out_dir=args.out_dir, force=args.force, max_files=args.max_files,
+        )
+        if args.upload:
+            upload_corpus(out, dataset=args.dataset)
+    elif args.command == "download-corpus":
+        from .data import download_corpus
+        download_corpus(dataset=args.dataset, out_dir=args.out_dir)
     elif args.command == "tokenizer-train":
         from .tokenizer import train_tokenizer
         train_tokenizer(
