@@ -1,20 +1,20 @@
-"""Streaming pretraining on PleIAs/SYNTH dataset.
+"""Streaming decoder-only pretraining on packed causal-LM blocks.
 
-Streams 80M examples from HuggingFace, tokenizes on-the-fly, and trains
-with simple CE loss (uniform weights). Saves needle_base.pkl every N steps.
+Streams any registered HF dataset (default PleIAs/SYNTH), packs documents into
+fixed-length rows with segment IDs, and trains with doc-boundary-masked CE +
+z-loss. Architecture arms (--ffn/--no-ffn) and optimizer arms (--optimizer
+muon|adamw) share this single entry point.
 
 Usage:
     needle pretrain --wandb
-    needle pretrain --wandb --max-steps 10000
-    needle tpu train large --name pretrain --wandb
+    needle pretrain --ffn --optimizer adamw --wandb   # control arm
+    needle tpu pretrain large -- --wandb
 """
 
 import math
 import os
 import pickle
 import time
-import queue
-import threading
 
 import jax
 import jax.numpy as jnp
@@ -22,155 +22,118 @@ import numpy as np
 import optax
 from tqdm import tqdm
 
-from ..dataset.tokenizer import get_tokenizer, EOS_ID, TOOLS_ID, PAD_ID
+from ..dataset.tokenizer import get_tokenizer
+from ..dataset.pretraining import (
+    PrefetchStream,
+    build_val_set,
+    packed_block_stream,
+    resolve_dataset,
+)
 from ..model.architecture import (
     SimpleAttentionNetwork,
     TransformerConfig,
-    make_padding_mask,
-    make_causal_mask,
+    make_causal_packing_mask,
 )
-from .optim import create_train_state, _wsd_schedule
+from ..model.run import CHECKPOINT_FORMAT_VERSION
+from .optim import create_train_state
 from ..utils.distributed import _replicate, _unreplicate, shard_batch, _upload_checkpoint
 
-_HF_PRETRAIN_REPO = "PleIAs/SYNTH"
+_HF_CHECKPOINT_REPO = "Cactus-Compute/checkpoints"
 
 
-def _stream_batches(tokenizer, batch_size, max_enc_len, max_dec_len, seed=42):
-    """Stream batches from PleIAs/SYNTH, tokenizing on-the-fly.
+def _losses(apply_fn, params, tokens, seg_ids):
+    """Doc-boundary-masked CE + z-loss over one packed block. Returns (total, ce)."""
+    inputs, targets = tokens[:, :-1], tokens[:, 1:]
+    seg_in, seg_tgt = seg_ids[:, :-1], seg_ids[:, 1:]
+    mask = make_causal_packing_mask(seg_in)
+    # mask the EOS -> next-doc-BOS step (and any padding, though rows are full)
+    loss_mask = ((seg_in == seg_tgt) & (seg_in > 0)).astype(jnp.float32)
+    denom = jnp.maximum(jnp.sum(loss_mask), 1.0)
 
-    Encoder: [query_tokens, <tools>, seed_text_tokens] truncated to max_enc_len
-    Decoder input:  [EOS, answer_tokens] truncated to max_dec_len
-    Decoder target: [answer_tokens, EOS] truncated to max_dec_len
-
-    Yields (enc, dec_in, dec_tgt) as numpy int32 arrays of shape (batch_size, seq_len).
-    """
-    from datasets import load_dataset
-
-    ds = load_dataset(_HF_PRETRAIN_REPO, split="train", streaming=True)
-    # Small shuffle buffer so first batch yields quickly on resume.
-    # Dataset is already split across 500 shards so it's already partially shuffled.
-    ds = ds.shuffle(seed=seed, buffer_size=1000)
-
-    tools_sep_id = TOOLS_ID
-    eos_id = EOS_ID
-    pad_id = PAD_ID
-
-    enc_batch = np.full((batch_size, max_enc_len), pad_id, dtype=np.int32)
-    dec_in_batch = np.full((batch_size, max_dec_len), pad_id, dtype=np.int32)
-    dec_tgt_batch = np.full((batch_size, max_dec_len), pad_id, dtype=np.int32)
-    idx = 0
-
-    for example in ds:
-        query = example.get("query") or ""
-        seed_text = example.get("query_seed_text") or ""
-        answer = example.get("synthetic_answer") or ""
-
-        if not query.strip() or not answer.strip():
-            continue
-
-        # Tokenize
-        q_toks = tokenizer.encode(query)
-        s_toks = tokenizer.encode(seed_text) if seed_text.strip() else []
-        a_toks = tokenizer.encode(answer)
-
-        # Build encoder input: [query, <tools>, seed_text]
-        max_query = max_enc_len - 2
-        if len(q_toks) > max_query:
-            q_toks = q_toks[:max_query]
-        remaining = max_enc_len - len(q_toks) - 1
-        s_toks = s_toks[:remaining]
-        enc_tokens = q_toks + [tools_sep_id] + s_toks
-
-        # Build decoder: input=[EOS, answer], target=[answer, EOS]
-        max_ans = max_dec_len - 1
-        a_toks = a_toks[:max_ans]
-        if len(a_toks) == 0:
-            continue
-        dec_in_tokens = [eos_id] + a_toks
-        dec_tgt_tokens = a_toks + [eos_id]
-
-        # Fill batch
-        enc_batch[idx, :len(enc_tokens)] = enc_tokens
-        dec_in_batch[idx, :len(dec_in_tokens)] = dec_in_tokens
-        dec_tgt_batch[idx, :len(dec_tgt_tokens)] = dec_tgt_tokens
-        idx += 1
-
-        if idx == batch_size:
-            yield enc_batch.copy(), dec_in_batch.copy(), dec_tgt_batch.copy()
-            enc_batch[:] = pad_id
-            dec_in_batch[:] = pad_id
-            dec_tgt_batch[:] = pad_id
-            idx = 0
+    logits = apply_fn({"params": params}, inputs, mask=mask)
+    ce = jnp.sum(
+        optax.softmax_cross_entropy_with_integer_labels(logits, targets) * loss_mask
+    ) / denom
+    z_loss = 1e-4 * jnp.sum(jax.nn.logsumexp(logits, axis=-1) ** 2 * loss_mask) / denom
+    return ce + z_loss, ce
 
 
-class _PrefetchStream:
-    """Prefetch streaming batches in a background thread."""
-
-    def __init__(self, generator_fn, prefetch=4):
-        self._queue = queue.Queue(maxsize=prefetch)
-        self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._produce, args=(generator_fn,), daemon=True)
-        self._thread.start()
-
-    def _produce(self, gen_fn):
-        try:
-            for batch in gen_fn():
-                if self._stop.is_set():
-                    return
-                self._queue.put(batch)
-            self._queue.put(None)
-        except Exception as e:
-            self._queue.put(e)
-
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        item = self._queue.get()
-        if item is None:
-            raise StopIteration
-        if isinstance(item, Exception):
-            raise item
-        return item
-
-    def close(self):
-        self._stop.set()
-
-
-def _pretrain_step(state, src, tgt_in, tgt_out, rng):
-    """Simple CE loss train step for pretraining. No QAT, no contrastive, no pruning."""
-
+def _train_step(state, tokens, seg_ids):
     def loss_fn(params):
-        src_mask = make_padding_mask(src, PAD_ID)
-        tgt_mask = make_causal_mask(tgt_in.shape[1]) & make_padding_mask(tgt_in, PAD_ID)
-        cross_mask = src_mask
+        return _losses(state.apply_fn, params, tokens, seg_ids)
 
-        logits = state.apply_fn(
-            {"params": params}, src, tgt_in,
-            src_mask=src_mask, tgt_mask=tgt_mask, cross_mask=cross_mask,
-        )
-        logits_f32 = logits.astype(jnp.float32)
-
-        padding_mask = (tgt_out != PAD_ID).astype(jnp.float32)
-        num_tokens = jnp.maximum(jnp.sum(padding_mask), 1.0)
-        ce = jnp.sum(
-            optax.softmax_cross_entropy_with_integer_labels(logits_f32, tgt_out) * padding_mask
-        ) / num_tokens
-        z_loss = 1e-4 * jnp.mean(jax.nn.logsumexp(logits_f32, axis=-1) ** 2)
-        return ce + z_loss
-
-    loss, grads = jax.value_and_grad(loss_fn)(state.params)
+    (loss, ce), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
     grads = jax.lax.pmean(grads, axis_name="batch")
     loss = jax.lax.pmean(loss, axis_name="batch")
+    ce = jax.lax.pmean(ce, axis_name="batch")
     state = state.apply_gradients(grads=grads)
-    return state, loss
+    return state, loss, ce
 
 
-_p_pretrain_step = None
+def _val_step(state, tokens, seg_ids):
+    """Per-device masked NLL sums, psum'd to global totals."""
+    inputs, targets = tokens[:, :-1], tokens[:, 1:]
+    seg_in, seg_tgt = seg_ids[:, :-1], seg_ids[:, 1:]
+    mask = make_causal_packing_mask(seg_in)
+    loss_mask = ((seg_in == seg_tgt) & (seg_in > 0)).astype(jnp.float32)
+
+    logits = state.apply_fn({"params": state.params}, inputs, mask=mask)
+    nll = optax.softmax_cross_entropy_with_integer_labels(logits, targets)
+    nll_sum = jax.lax.psum(jnp.sum(nll * loss_mask), axis_name="batch")
+    count = jax.lax.psum(jnp.sum(loss_mask), axis_name="batch")
+    return nll_sum, count
 
 
-def _make_p_pretrain_step():
-    return jax.pmap(_pretrain_step, axis_name="batch", donate_argnums=(0,))
+def _run_val(p_val_step, state, val_tokens, val_segs, host_slice, num_devices):
+    total_nll, total_count = 0.0, 0.0
+    for tokens, segs in zip(val_tokens, val_segs):
+        tk = shard_batch(tokens[host_slice], num_devices)
+        sg = shard_batch(segs[host_slice], num_devices)
+        nll, count = p_val_step(state, tk, sg)
+        total_nll += float(nll.addressable_shards[0].data[0])
+        total_count += float(count.addressable_shards[0].data[0])
+    loss = total_nll / max(total_count, 1.0)
+    return loss, math.exp(min(loss, 20))
+
+
+def _gate_metrics(params):
+    """Per-layer sigmoid(gate) values — a host-side param read, essentially free."""
+    block = params["stack"]["layers"]["block"]
+    metrics = {}
+    attn = np.asarray(jax.nn.sigmoid(block["attn_gate"].astype(jnp.float32)))
+    for i, g in enumerate(attn):
+        metrics[f"gates/attn_layer_{i}"] = float(g)
+    metrics["gates/attn_mean"] = float(attn.mean())
+    if "ffn_gate" in block:
+        ffn = np.asarray(jax.nn.sigmoid(block["ffn_gate"].astype(jnp.float32)))
+        for i, g in enumerate(ffn):
+            metrics[f"gates/ffn_layer_{i}"] = float(g)
+        metrics["gates/ffn_mean"] = float(ffn.mean())
+    return metrics
+
+
+def _rank_metrics(model, params, tokens, segs, max_rows=2, max_len=257):
+    """Effective rank (SVD entropy) of per-layer hidden states on a small val slice.
+
+    Tests the Dong et al. rank-collapse prediction. Materializes (L, B, T, D) —
+    keep the slice small, and never call inside the pmapped step.
+    """
+    tokens = jnp.asarray(tokens[:max_rows, :max_len])
+    segs = jnp.asarray(segs[:max_rows, :max_len])
+    hidden = model.apply(
+        {"params": params}, tokens,
+        mask=make_causal_packing_mask(segs),
+        method="hidden_states",
+    )
+    metrics = {}
+    for i, layer in enumerate(np.asarray(hidden)):
+        X = layer.reshape(-1, layer.shape[-1]).astype(np.float64)
+        X = X - X.mean(axis=0, keepdims=True)
+        s = np.linalg.svd(X, compute_uv=False)
+        p = s / max(s.sum(), 1e-12)
+        p = p[p > 0]
+        metrics[f"rank/layer_{i}"] = float(np.exp(-(p * np.log(p)).sum()))
+    return metrics
 
 
 def pretrain(args):
@@ -180,234 +143,241 @@ def pretrain(args):
     total_devices = jax.device_count()
     is_main = host_id == 0
 
-    experiment_name = getattr(args, "name", "pretrain")
-    use_wandb = getattr(args, "wandb", False)
-    if use_wandb and is_main:
+    use_wandb = args.wandb and is_main
+    if use_wandb:
         import wandb
         if wandb.run is None:
-            wandb.init(project="needle-v1", name=experiment_name, config=vars(args))
+            wandb.init(project="needle-san", name=args.name, config=vars(args))
 
-    print(f"\n[1/3] Detecting devices...")
+    print(f"\n[1/4] Detecting devices...")
     print(f"      {num_devices} local, {total_devices} total across {num_hosts} hosts")
 
-    print(f"\n[2/3] Loading tokenizer...")
+    print(f"\n[2/4] Loading tokenizer and dataset spec...")
     tokenizer = get_tokenizer()
+    spec = resolve_dataset(args.dataset, getattr(args, "text_field", None))
 
-    # If resuming, download checkpoint from HF if not local, then load config
-    resume_checkpoint_arg = getattr(args, "checkpoint", None)
-    _preloaded_ckpt = None
-    if resume_checkpoint_arg:
-        if not os.path.exists(resume_checkpoint_arg):
+    # If resuming, download checkpoint from HF if not local, then adopt its config
+    resume_path = getattr(args, "checkpoint", None)
+    ckpt_data = None
+    if resume_path:
+        if not os.path.exists(resume_path):
             print(f"  Checkpoint not found locally, downloading from HF...", flush=True)
-            try:
-                from huggingface_hub import hf_hub_download
-                local_dir = os.path.dirname(resume_checkpoint_arg) or "checkpoints"
-                os.makedirs(local_dir, exist_ok=True)
-                local_path = hf_hub_download(
-                    repo_id="Cactus-Compute/checkpoints",
-                    filename=os.path.basename(resume_checkpoint_arg),
-                    repo_type="model",
-                    local_dir=local_dir,
-                )
-                resume_checkpoint_arg = local_path
-                print(f"  Downloaded to {local_path}", flush=True)
-            except Exception as e:
-                print(f"  ERROR downloading checkpoint: {e}", flush=True)
-                return
-
-        print(f"  Pre-loading config from {resume_checkpoint_arg}", flush=True)
-        with open(resume_checkpoint_arg, "rb") as f:
-            _preloaded_ckpt = pickle.load(f)
-        config = TransformerConfig(**_preloaded_ckpt["config"])
-        print(f"  Config from ckpt: d={config.d_model}, "
-              f"heads={config.num_heads}, layers={config.num_encoder_layers}/{config.num_decoder_layers}",
-              flush=True)
+            from huggingface_hub import hf_hub_download
+            local_dir = os.path.dirname(resume_path) or "checkpoints"
+            os.makedirs(local_dir, exist_ok=True)
+            resume_path = hf_hub_download(
+                repo_id=_HF_CHECKPOINT_REPO,
+                filename=os.path.basename(resume_path),
+                repo_type="model",
+                local_dir=local_dir,
+            )
+        with open(resume_path, "rb") as f:
+            ckpt_data = pickle.load(f)
+        version = ckpt_data.get("format_version") if isinstance(ckpt_data, dict) else None
+        if version != CHECKPOINT_FORMAT_VERSION:
+            raise ValueError(
+                f"{resume_path} is not a format-v{CHECKPOINT_FORMAT_VERSION} checkpoint "
+                f"(got {version!r}) — old enc-dec checkpoints cannot be resumed."
+            )
+        config = TransformerConfig(**ckpt_data["config"])
+        print(f"  Config from ckpt: d={config.d_model}, {config.num_layers}L, "
+              f"ffn={not config.no_feedforward}", flush=True)
     else:
         config = TransformerConfig(
+            vocab_size=tokenizer.vocab_size,
             d_model=args.d_model,
             num_heads=args.num_heads,
             num_kv_heads=getattr(args, "num_kv_heads", None) or args.num_heads,
-            num_encoder_layers=args.num_layers,
-            num_decoder_layers=getattr(args, "num_dec_layers", args.num_layers),
+            num_layers=args.num_layers,
             d_ff=getattr(args, "d_ff", None) or args.d_model * 4,
-            max_seq_len=max(args.max_enc_len, args.max_dec_len),
+            max_seq_len=args.seq_len,
             dtype=args.dtype,
-            activation=getattr(args, "activation", "swiglu"),
-            no_feedforward=getattr(args, "no_feedforward", True),
-            contrastive_dim=getattr(args, "contrastive_dim", 128),
+            activation=args.activation,
+            no_feedforward=not args.ffn,
         )
+
+    assert config.vocab_size == tokenizer.vocab_size, (
+        f"Config vocab {config.vocab_size} != tokenizer vocab {tokenizer.vocab_size}"
+    )
 
     effective_batch_size = args.batch_size * num_devices
     global_batch_size = effective_batch_size * num_hosts
+    seq_len = args.seq_len
 
-    # Estimate total steps: 80M rows / global_batch_size
-    estimated_rows = 80_000_000
-    max_steps = getattr(args, "max_steps", None)
-    estimated_steps = estimated_rows // global_batch_size
-    if max_steps:
-        estimated_steps = min(estimated_steps, max_steps)
-    total_steps = estimated_steps * args.epochs
+    total_steps = args.max_steps
     warmup_steps = max(1, int(total_steps * args.warmup_ratio))
-
     scaled_lr = args.lr * total_devices
-    muon_lr = getattr(args, "muon_lr", 0.02) * math.sqrt(total_devices)
-    decay_ratio = getattr(args, "decay_ratio", 0.05)
+    muon_lr = args.muon_lr * math.sqrt(total_devices)
 
-    resume_step = 0
-    resume_checkpoint = resume_checkpoint_arg
-    ckpt_data = _preloaded_ckpt
+    print(f"\n[3/4] Building val set ({args.val_blocks} blocks)...")
+    val_tokens, val_segs, val_docs = build_val_set(
+        tokenizer, spec, args.val_blocks, global_batch_size, seq_len
+    )
+    print(f"      {val_docs:,} docs held out from the stream head")
 
-    print(f"\n[3/3] Initializing model...")
+    print(f"\n[4/4] Initializing model...")
     rng = jax.random.PRNGKey(args.seed)
     rng, init_rng = jax.random.split(rng)
-    state = create_train_state(init_rng, config, scaled_lr, muon_lr, total_steps, warmup_steps, decay_ratio)
+    state = create_train_state(
+        init_rng, config, scaled_lr, muon_lr, total_steps, warmup_steps,
+        args.decay_ratio, optimizer=args.optimizer,
+    )
 
-    if resume_checkpoint and ckpt_data is not None:
-        print(f"  Resuming from {resume_checkpoint}", flush=True)
-        ckpt_params = jax.tree.map(jnp.array, ckpt_data["params"])
+    resume_step = 0
+    if ckpt_data is not None:
+        # fp16 on disk -> f32 for training (bf16 compute dtype is per-module)
+        ckpt_params = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float32), ckpt_data["params"])
         state = state.replace(params=ckpt_params)
         del ckpt_params
-        print(f"  Loaded checkpoint params", flush=True)
-    # Use --resume-step override, else read from checkpoint, else 0
-    if ckpt_data is not None:
         manual_step = getattr(args, "resume_step", None)
-        if manual_step is not None:
-            resume_step = manual_step
-        else:
-            resume_step = ckpt_data.get("pretrain_step", 0)
-        if resume_step > 0:
-            print(f"  Resuming from step {resume_step}", flush=True)
+        resume_step = manual_step if manual_step is not None else ckpt_data.get("step", 0)
+        prev_total = (ckpt_data.get("run") or {}).get("max_steps")
+        if prev_total and prev_total != total_steps:
+            print(f"  WARNING: resuming with --max-steps {total_steps} but the run "
+                  f"started with {prev_total} — the WSD schedule shape will change.",
+                  flush=True)
+        print(f"  Resumed params from {resume_path} at step {resume_step}", flush=True)
 
-    print(f"  Replicating state across {num_devices} local devices...", flush=True)
     state = _replicate(state)
-    print(f"  Replicated.", flush=True)
-
     param_count = sum(x.size for x in jax.tree.leaves(_unreplicate(state).params))
-    print(f"  Params: {param_count:,}", flush=True)
 
-    global _p_pretrain_step
-    _p_pretrain_step = _make_p_pretrain_step()
-    print(f"  pmap ready.", flush=True)
+    p_train_step = jax.pmap(_train_step, axis_name="batch", donate_argnums=(0,))
+    p_val_step = jax.pmap(_val_step, axis_name="batch")
 
-    save_every = getattr(args, "save_every", 1000)
+    model = SimpleAttentionNetwork(config)  # host-side apply for rank diagnostics
+
+    run_meta = {
+        "optimizer": args.optimizer,
+        "dataset": args.dataset,
+        "seed": args.seed,
+        "max_steps": total_steps,
+        "no_feedforward": config.no_feedforward,
+    }
     checkpoint_dir = getattr(args, "checkpoint_dir", "checkpoints")
     os.makedirs(checkpoint_dir, exist_ok=True)
 
     if is_main:
-        decay_steps = max(1, int(total_steps * decay_ratio))
+        decay_steps = max(1, int(total_steps * args.decay_ratio))
         stable_steps = total_steps - warmup_steps - decay_steps
+        arch = "attention-only (SAN)" if config.no_feedforward else f"FFN d_ff={config.d_ff}"
         print(f"\n  ─────────────────────────────────────")
-        print(f"  Pretraining on PleIAs/SYNTH")
+        print(f"  Pretraining on {spec.repo}")
         print(f"  ─────────────────────────────────────")
         print(f"  Parameters    {param_count:>12,}")
+        print(f"  Architecture  {arch:>12}")
         print(f"  d_model       {config.d_model:>12}")
         print(f"  Heads         {config.num_heads:>7} ({config.num_kv_heads} KV)")
-        print(f"  Layers        {config.num_encoder_layers:>7} enc / {config.num_decoder_layers} dec")
+        print(f"  Layers        {config.num_layers:>12}")
+        print(f"  Seq len       {seq_len:>12}")
         print(f"  Dtype         {config.dtype:>12}")
+        print(f"  Optimizer     {args.optimizer:>12}")
         print(f"  ─────────────────────────────────────")
         print(f"  Hosts         {num_hosts:>12}")
         print(f"  Devices       {num_devices:>5}/host, {total_devices} total")
         print(f"  Batch         {args.batch_size:>7} x {total_devices} = {global_batch_size}")
         print(f"  Adam LR       {args.lr:>7} x {total_devices} = {scaled_lr}")
-        print(f"  Muon LR       {getattr(args, 'muon_lr', 0.02):>7.4f} -> {muon_lr:.4f}")
+        print(f"  Muon LR       {args.muon_lr:>7.4f} -> {muon_lr:.4f}")
         print(f"  Schedule      {warmup_steps}w / {stable_steps}s / {decay_steps}d (WSD)")
-        print(f"  Est. steps    {estimated_steps:>12,}")
-        print(f"  Save every    {save_every:>12,}")
+        print(f"  Total steps   {total_steps:>12,}")
         print(f"  ─────────────────────────────────────\n")
 
+    # Fresh data ordering on resume (avoid re-seeing pre-crash examples)
+    stream_seed = args.seed + resume_step
+    batch_stream = PrefetchStream(
+        lambda: packed_block_stream(tokenizer, spec, global_batch_size, seq_len,
+                                    seed=stream_seed, skip_docs=val_docs),
+        prefetch=8,
+    )
+
+    host_slice = slice(host_id * effective_batch_size, (host_id + 1) * effective_batch_size)
     global_step = resume_step
+    pbar = tqdm(desc="Pretrain", total=total_steps, initial=resume_step, disable=not is_main)
 
-    for epoch in range(args.epochs):
-        # Use a different seed on resume to get fresh data ordering
-        # (avoids re-seeing exactly the same examples we saw before the crash)
-        stream_seed = args.seed + epoch + resume_step
-        batch_stream = _PrefetchStream(
-            lambda: _stream_batches(tokenizer, global_batch_size,
-                                    args.max_enc_len, args.max_dec_len,
-                                    seed=stream_seed),
-            prefetch=8,
-        )
+    for tokens, segs in batch_stream:
+        if global_step >= total_steps:
+            break
+        t0 = time.perf_counter()
 
-        pbar = tqdm(desc=f"Pretrain epoch {epoch + 1}/{args.epochs}",
-                     total=estimated_steps, initial=resume_step,
-                     disable=not is_main)
+        tokens_b = shard_batch(tokens[host_slice], num_devices)
+        segs_b = shard_batch(segs[host_slice], num_devices)
+        state, loss, ce = p_train_step(state, tokens_b, segs_b)
 
-        for batch in batch_stream:
-            if max_steps and global_step >= max_steps:
-                break
+        loss_val = float(loss.addressable_shards[0].data[0])
+        ce_val = float(ce.addressable_shards[0].data[0])
+        ppl = math.exp(min(ce_val, 20))
+        dt = time.perf_counter() - t0
+        global_step += 1
 
-            src, tgt_in, tgt_out = batch
-            t0 = time.perf_counter()
+        pbar.update(1)
+        pbar.set_postfix(loss=f"{loss_val:.4f}", ppl=f"{ppl:.2f}",
+                         tok_s=f"{global_batch_size * seq_len / dt:.0f}")
 
-            # Slice this host's portion
-            host_slice = slice(host_id * effective_batch_size,
-                               (host_id + 1) * effective_batch_size)
-            src = src[host_slice]
-            tgt_in = tgt_in[host_slice]
-            tgt_out = tgt_out[host_slice]
+        if use_wandb:
+            import wandb
+            wandb.log({
+                "train/loss": loss_val,
+                "train/ce": ce_val,
+                "train/ppl": ppl,
+                "train/tokens_per_sec": global_batch_size * seq_len / dt,
+                "train/step": global_step,
+            }, step=global_step)
 
-            # Shard for pmap
-            src_b = shard_batch(src, num_devices)
-            tgt_in_b = shard_batch(tgt_in, num_devices)
-            tgt_out_b = shard_batch(tgt_out, num_devices)
+        if global_step % args.eval_every == 0:
+            val_loss, val_ppl = _run_val(p_val_step, state, val_tokens, val_segs,
+                                         host_slice, num_devices)
+            if is_main:
+                host_params = _unreplicate(state).params
+                metrics = {"val/loss": val_loss, "val/ppl": val_ppl}
+                metrics.update(_gate_metrics(host_params))
+                log_rank_every = getattr(args, "log_rank_every", 0)
+                if log_rank_every and global_step % log_rank_every == 0:
+                    metrics.update(_rank_metrics(model, host_params,
+                                                 val_tokens[0][host_slice],
+                                                 val_segs[0][host_slice]))
+                pbar.write(f"  [step {global_step}] val loss {val_loss:.4f}, ppl {val_ppl:.2f}")
+                if use_wandb:
+                    import wandb
+                    wandb.log(metrics, step=global_step)
 
-            rng, step_rng = jax.random.split(rng)
-            step_rngs = jax.random.split(step_rng, num_devices)
+        if is_main and global_step % args.save_every == 0:
+            _save_checkpoint(state, config, run_meta, checkpoint_dir, args.name, global_step,
+                             upload=getattr(args, "upload_checkpoints", False))
 
-            state, loss = _p_pretrain_step(state, src_b, tgt_in_b, tgt_out_b, step_rngs)
+    batch_stream.close()
+    pbar.close()
 
-            loss_val = float(loss.addressable_shards[0].data[0])
-            ppl = math.exp(min(loss_val, 20))
-            dt = time.perf_counter() - t0
-            global_step += 1
-
-            pbar.update(1)
-            pbar.set_postfix(loss=f"{loss_val:.4f}", ppl=f"{ppl:.2f}",
-                             tok_s=f"{global_batch_size * (args.max_enc_len + args.max_dec_len) / dt:.0f}")
-
-            if use_wandb and is_main:
-                import wandb
-                wandb.log({
-                    "pretrain/loss": loss_val,
-                    "pretrain/ppl": ppl,
-                    "pretrain/step": global_step,
-                    "pretrain/tokens_per_sec": global_batch_size * (args.max_enc_len + args.max_dec_len) / dt,
-                })
-
-            # Save checkpoint every N steps
-            if is_main and global_step % save_every == 0:
-                _save_pretrain_checkpoint(state, config, checkpoint_dir, global_step)
-
-        batch_stream.close()
-        pbar.close()
-
-    # Final save
     if is_main:
-        ckpt_path = _save_pretrain_checkpoint(state, config, checkpoint_dir, global_step)
+        ckpt_path = _save_checkpoint(state, config, run_meta, checkpoint_dir, args.name, global_step,
+                                     upload=getattr(args, "upload_checkpoints", False))
         print(f"\nPretraining complete. {global_step} steps.")
-        print(f"Base checkpoint: {ckpt_path}")
+        print(f"Checkpoint: {ckpt_path}")
 
-    if use_wandb and is_main:
+    if use_wandb:
         import wandb
         wandb.finish()
 
-    # Sync all hosts before exit
     jax.experimental.multihost_utils.sync_global_devices("pretrain_done")
 
 
-def _save_pretrain_checkpoint(state, config, checkpoint_dir, global_step):
-    """Save and upload needle_base.pkl."""
+def _save_checkpoint(state, config, run_meta, checkpoint_dir, name, global_step, upload=False):
+    """Save <name>.pkl (format v2), optionally uploading to HF hub."""
     params = _unreplicate(state).params
     params_np = jax.tree.map(lambda x: np.array(x).astype(np.float16), params)
 
-    ckpt_path = os.path.join(checkpoint_dir, "needle_base.pkl")
+    ckpt_path = os.path.join(checkpoint_dir, f"{name}.pkl")
     with open(ckpt_path, "wb") as f:
-        pickle.dump({"params": params_np, "config": config.__dict__,
-                      "pretrain_step": global_step}, f)
+        pickle.dump({
+            "format_version": CHECKPOINT_FORMAT_VERSION,
+            "params": params_np,
+            "config": config.__dict__,
+            "step": global_step,
+            "run": run_meta,
+        }, f)
 
     param_count = sum(x.size for x in jax.tree.leaves(params_np))
     size_mb = sum(x.nbytes for x in jax.tree.leaves(params_np)) / 1e6
     print(f"\n  [step {global_step}] Saved {ckpt_path} ({param_count:,} params, {size_mb:.1f} MB)")
 
-    _upload_checkpoint(ckpt_path)
+    if upload:
+        _upload_checkpoint(ckpt_path)
     return ckpt_path
