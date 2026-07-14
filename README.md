@@ -15,23 +15,33 @@ We show that MLPs can be completely dropped from transformer networks.
       ┌───────┴───────┐
       │   ZCRMSNorm   │
       └───────┬───────┘
-      ┌───────┴────────┐
-      │  Block x N     │
-      │ ┌────────────┐ │
-      │ │ ZCRMSNorm  │ │
-      │ │ Masked Self│ │
-      │ │ Attn       │ │
-      │ │ GQA + RoPE │ │
-      │ │ Gated Res  │ │
-      │ │            │ │
-      │ │  (no FFN)  │ │
-      │ └────────────┘ │
-      └───────┬────────┘
+      ┌───────┴─────────────────────────────┐
+      │       │                             │   Block × N
+      │       ▲ y                           │
+      │      (+)◄─────────────────────┐     │   y = x + σ(g)·o
+      │       ▲                       │     │
+      │     × σ(g)                    │     │   σ(g): learnable scalar gate,
+      │       ▲                       │     │   g init 0 → σ(g) = 0.5
+      │   o = W_o·(A·v)               │     │
+      │       ▲                       │     │
+      │   A = softmax(q·kᵀ/√d + M)    │     │   GQA + causal mask
+      │       ▲                       │     │
+      │   q,k = RoPE(q,k)             │ x   │
+      │       ▲                       │     │
+      │   q,k = ZCRMSNorm(q,k)        │     │   (QK-norm)
+      │       ▲                       │     │
+      │   q,k,v = W_q·u, W_k·u, W_v·u │     │   (GQA)
+      │       ▲                       │     │
+      │   u = ZCRMSNorm(x)            │     │   ZCRMSNorm(z) = (1+γ)·z/RMS(z)
+      │       ▲                       │     │   RMS(z) = √mean(z²), γ init 0
+      │       ├───────────────────────┘     │
+      │       │ x                           │
+      └───────┬─────────────────────────────┘
       ┌───────┴───────┐
       │   Embedding   │  ← shared
       └───────┬───────┘
       ┌───────┴───────┐
-      │  Text tokens  │
+      │ Input tokens  │
       └───────────────┘
 ```
 
