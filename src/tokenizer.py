@@ -13,6 +13,15 @@ EOS_ID = 1
 BOS_ID = 2
 UNK_ID = 3
 
+# Single-turn ChatML markers (PleIAs Monad/Baguettotron-compatible format).
+# Registered as atomic tokenizer symbols so trace/answer regions can be
+# located exactly in token space for per-region loss analysis.
+IM_START = "<|im_start|>"
+IM_END = "<|im_end|>"
+THINK_START = "<think>"
+THINK_END = "</think>"
+CHAT_MARKERS = [IM_START, IM_END, THINK_START, THINK_END]
+
 # Single HF repo for all branch artifacts: tokenizer/ and checkpoints/.
 HF_REPO = "Cactus-Compute/simple-attention-networks"
 _HF_TOKENIZER_DIR = "tokenizer"
@@ -128,8 +137,10 @@ def train_tokenizer(dataset="synth", text_field=None, vocab_size=16384,
             eos_id=EOS_ID,
             bos_id=BOS_ID,
             unk_id=UNK_ID,
+            user_defined_symbols=CHAT_MARKERS,
             byte_fallback=True,
             normalization_rule_name="identity",
+            remove_extra_whitespaces=False,
             input_sentence_size=2_000_000,
             shuffle_input_sentence=True,
             num_threads=min(128, max(1, (os.cpu_count() or 1) * 3 // 4)),

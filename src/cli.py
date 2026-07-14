@@ -121,8 +121,8 @@ def main():
                    help="Resume from a format-v2 checkpoint")
     p.add_argument("--resume-step", type=int, default=None,
                    help="Override resume step (skip this many batches)")
-    p.add_argument("--batch-size", type=int, default=128,
-                   help="Per-device batch size in packed blocks (default: 128)")
+    p.add_argument("--batch-size", type=int, default=64,
+                   help="Per-device batch size in packed blocks (default: 64)")
     p.add_argument("--seq-len", type=int, default=2048)
     p.add_argument("--max-steps", type=int, default=100_000,
                    help="Total training steps — also the WSD schedule horizon (default: 100000). "

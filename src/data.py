@@ -17,7 +17,7 @@ from typing import Callable, Optional
 
 import numpy as np
 
-from .tokenizer import BOS_ID, EOS_ID
+from .tokenizer import BOS_ID, EOS_ID, IM_START, IM_END, THINK_START, THINK_END
 
 
 @dataclass
@@ -29,16 +29,21 @@ class DatasetSpec:
 
 
 def _fmt_synth(ex):
-    """PleIAs/SYNTH: query + reasoning trace + answer as one document.
+    """PleIAs/SYNTH as single-turn ChatML with a thinking trace.
 
-    SYNTH is reasoning-by-design — 97%+ of samples carry a synthetic_reasoning
-    trace, and the dataset's SOTA-for-size results are for the full format.
-    Traces also externalize intermediate computation into context, the regime
-    the SAN hypothesis targets.
+    Matches the Monad/Baguettotron format so their published numbers are
+    comparable reference points. SYNTH is reasoning-by-design (97%+ of samples
+    carry a trace); the markers are atomic tokenizer symbols, so trace vs
+    answer regions can be located exactly for per-region loss analysis.
     """
-    parts = [ex.get("query"), ex.get("synthetic_reasoning"), ex.get("synthetic_answer")]
-    text = "\n\n".join(p.strip() for p in parts if p and p.strip())
-    return text or None
+    q = (ex.get("query") or "").strip()
+    r = (ex.get("synthetic_reasoning") or "").strip()
+    a = (ex.get("synthetic_answer") or "").strip()
+    if not q or not a:
+        return None
+    think = f"{THINK_START}\n{r}\n{THINK_END}\n" if r else ""
+    return (f"{IM_START}user\n{q}{IM_END}\n"
+            f"{IM_START}assistant\n{think}{a}{IM_END}")
 
 
 def _fmt_text_field(field_name):
