@@ -138,27 +138,26 @@ def main():
                    help="Save and upload checkpoint every N steps (default: 1000)")
     p.add_argument("--checkpoint-dir", type=str, default="checkpoints")
 
-    p = sub.add_parser("run", add_help=False)
+    p = sub.add_parser("sample", add_help=False)
     p.add_argument("--checkpoint", type=str, required=True)
-    p.add_argument("--query", type=str, default=None, help="Query text for tool-call generation")
-    p.add_argument("--tools", type=str, default=None, help="Tools JSON for tool-call generation")
-    p.add_argument("--max-len", type=int, default=512)
+    p.add_argument("--prompt", type=str, default=None, help="Prompt text to continue")
+    p.add_argument("--max-new-tokens", type=int, default=256)
+    p.add_argument("--temperature", type=float, default=0.0)
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--no-constrained", action="store_true",
-                   help="Disable grammar-constrained decoding for tool names/arg keys")
 
     p = sub.add_parser("eval", add_help=False)
     p.add_argument("--checkpoint", type=str, required=True)
-    p.add_argument("--batch-size", type=int, default=32)
-    p.add_argument("--max-eval-samples", type=int, default=5000)
-    p.add_argument("--max-enc-len", type=int, default=DEFAULT_MAX_ENC_LEN)
-    p.add_argument("--max-dec-len", type=int, default=DEFAULT_MAX_DEC_LEN)
-    p.add_argument("--max-gen-len", type=int, default=DEFAULT_MAX_GEN_LEN)
-    p.add_argument("--tool-call-samples", type=int, default=200,
-                   help="Samples for tool-call accuracy eval (default: 200)")
+    p.add_argument("--dataset", type=str, default="synth",
+                   help="Dataset for held-out val loss (default: synth)")
+    p.add_argument("--text-field", type=str, default=None,
+                   help="Text field name for ad-hoc HF datasets")
+    p.add_argument("--seq-len", type=int, default=1024)
+    p.add_argument("--batch-size", type=int, default=8)
+    p.add_argument("--val-blocks", type=int, default=64,
+                   help="Number of packed validation blocks (default: 64)")
     p.add_argument("--throughput-runs", type=int, default=10)
-    p.add_argument("--no-constrained", action="store_true",
-                   help="Disable grammar-constrained decoding for tool names/arg keys")
+    p.add_argument("--tasks", type=str, nargs="*", default=None,
+                   help="Reserved: downstream tasks (lm-eval-harness adapter, future)")
 
     p = sub.add_parser("tpu", add_help=False)
     tpu_sub = p.add_subparsers(dest="tpu_action")
@@ -219,7 +218,7 @@ def main():
             jax.distributed.initialize()
         from .training.pretrain import pretrain
         pretrain(args)
-    elif args.command == "run":
+    elif args.command == "sample":
         from .model.run import main as run_main
         run_main(args)
     elif args.command == "eval":

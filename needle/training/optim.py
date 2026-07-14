@@ -67,6 +67,12 @@ def _param_labels(params):
     return jax.tree_util.tree_map_with_path(_label, params)
 
 
+def _kernel_mask(params):
+    """Bool pytree: True for Dense kernels — the weight-decay set for both
+    optimizer arms, so the muon/adamw comparison decays identical params."""
+    return jax.tree.map(lambda label: label == "muon", _param_labels(params))
+
+
 def _wsd_schedule(peak_value, total_steps, warmup_steps, decay_ratio=0.15):
     """Warmup-Stable-Decay schedule: linear warmup, hold peak, cosine decay."""
     decay_steps = max(1, int(total_steps * decay_ratio))
@@ -81,38 +87,40 @@ def _wsd_schedule(peak_value, total_steps, warmup_steps, decay_ratio=0.15):
     )
 
 
-def create_train_state(rng, config, learning_rate, muon_lr, total_steps, warmup_steps, decay_ratio=0.15):
+def create_train_state(rng, config, learning_rate, muon_lr, total_steps, warmup_steps,
+                       decay_ratio=0.15, optimizer="muon"):
     model = SimpleAttentionNetwork(config)
 
     rng, init_rng = jax.random.split(rng)
-    dummy_src = jnp.ones((1, 128), dtype=jnp.int32)
-    dummy_tgt = jnp.ones((1, 128), dtype=jnp.int32)
-    variables = model.init(
-        {"params": init_rng},
-        dummy_src, dummy_tgt,
-        method="init_all",
-    )
+    dummy_tokens = jnp.ones((1, 128), dtype=jnp.int32)
+    variables = model.init({"params": init_rng}, dummy_tokens)
 
     adam_schedule = _wsd_schedule(learning_rate, total_steps, warmup_steps, decay_ratio)
-    muon_schedule = _wsd_schedule(muon_lr, total_steps, warmup_steps, decay_ratio)
 
-    muon_opt = optax.chain(
-        scale_by_muon(momentum=0.95, ns_steps=5),
-        optax.add_decayed_weights(weight_decay=0.01),
-        optax.scale_by_schedule(muon_schedule),
-        optax.scale(-1.0),
-    )
-    adam_opt = optax.chain(
-        optax.adamw(adam_schedule, b2=0.95, weight_decay=0.0),
-    )
+    if optimizer == "muon":
+        muon_schedule = _wsd_schedule(muon_lr, total_steps, warmup_steps, decay_ratio)
+        muon_opt = optax.chain(
+            scale_by_muon(momentum=0.95, ns_steps=5),
+            optax.add_decayed_weights(weight_decay=0.01),
+            optax.scale_by_schedule(muon_schedule),
+            optax.scale(-1.0),
+        )
+        adam_opt = optax.adamw(adam_schedule, b2=0.95, weight_decay=0.0)
+        tx = optax.chain(
+            optax.clip_by_global_norm(1.0),
+            optax.multi_transform(
+                {"muon": muon_opt, "adam": adam_opt},
+                _param_labels,
+            ),
+        )
+    elif optimizer == "adamw":
+        tx = optax.chain(
+            optax.clip_by_global_norm(1.0),
+            optax.adamw(adam_schedule, b2=0.95, weight_decay=0.01, mask=_kernel_mask),
+        )
+    else:
+        raise ValueError(f"Unknown optimizer: {optimizer!r} (expected 'muon' or 'adamw')")
 
-    tx = optax.chain(
-        optax.clip_by_global_norm(1.0),
-        optax.multi_transform(
-            {"muon": muon_opt, "adam": adam_opt},
-            _param_labels,
-        ),
-    )
     return train_state.TrainState.create(
         apply_fn=model.apply,
         params=variables["params"],
