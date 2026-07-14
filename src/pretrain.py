@@ -276,7 +276,8 @@ def pretrain(args):
     stream_seed = args.seed + resume_step
     batch_stream = PrefetchStream(
         lambda: packed_block_stream(tokenizer, spec, global_batch_size, seq_len,
-                                    seed=stream_seed, skip_docs=val_docs),
+                                    seed=stream_seed, skip_docs=val_docs,
+                                    max_docs=getattr(args, "max_docs", None)),
         prefetch=8,
     )
 

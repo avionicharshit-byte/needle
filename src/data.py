@@ -115,10 +115,22 @@ def _pack_rows(tokenizer, texts, batch_size, seq_len):
                     rows_t, rows_s = [], []
 
 
-def packed_block_stream(tokenizer, spec, batch_size, seq_len, seed=42, skip_docs=0):
-    """Infinite shuffled train stream of packed batches."""
-    texts = stream_texts(spec, seed=seed, shuffle=True, skip=skip_docs)
-    yield from _pack_rows(tokenizer, texts, batch_size, seq_len)
+def packed_block_stream(tokenizer, spec, batch_size, seq_len, seed=42, skip_docs=0, max_docs=None):
+    """Infinite shuffled train stream of packed batches.
+
+    Cycles the dataset when exhausted, reshuffling with a fresh seed each
+    epoch, so training always reaches --max-steps regardless of corpus size.
+    max_docs caps the unique documents drawn per epoch (skip/take applied
+    before shuffle, so the subset is fixed across epochs) — the knob for
+    data-scaling runs.
+    """
+    epoch = 0
+    while True:
+        texts = stream_texts(spec, seed=seed + epoch, shuffle=True,
+                             skip=skip_docs, take=max_docs)
+        yield from _pack_rows(tokenizer, texts, batch_size, seq_len)
+        epoch += 1
+        print(f"[data] dataset pass {epoch} complete — cycling with fresh shuffle", flush=True)
 
 
 def build_val_set(tokenizer, spec, num_blocks, batch_size, seq_len, oversample=10, seed=3407):

@@ -121,7 +121,11 @@ def main():
                    help="Per-device batch size in packed blocks (default: 128)")
     p.add_argument("--seq-len", type=int, default=2048)
     p.add_argument("--max-steps", type=int, default=100_000,
-                   help="Total training steps — also the WSD schedule horizon (default: 100000)")
+                   help="Total training steps — also the WSD schedule horizon (default: 100000). "
+                        "Token budget = max_steps x batch_size x num_gpus x seq_len")
+    p.add_argument("--max-docs", type=int, default=None,
+                   help="Cap unique training documents per epoch; the stream cycles over "
+                        "this fixed subset (default: full dataset). For data-scaling runs")
     p.add_argument("--optimizer", type=str, default="muon", choices=["muon", "adamw"])
     p.add_argument("--ffn", action=argparse.BooleanOptionalAction, default=False,
                    help="Include FFN sublayers (control arm). Default: attention-only SAN")
