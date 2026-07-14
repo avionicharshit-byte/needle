@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from src.pretraining import _pack_rows
+from src.data import _pack_rows
 from src.tokenizer import BOS_ID, EOS_ID
 
 

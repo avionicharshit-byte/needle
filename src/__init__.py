@@ -1,4 +1,4 @@
-"""Needle — Simple Attention Networks: attention-only transformer pretraining research."""
+"""SAN — Simple Attention Networks: attention-only transformer pretraining research."""
 
 from .architecture import (
     SimpleAttentionNetwork,

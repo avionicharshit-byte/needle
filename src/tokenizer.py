@@ -2,12 +2,11 @@ import os
 
 import sentencepiece as spm
 
-# Artifacts live flat next to the code. The artifact is named needle_lm (not
-# needle) on purpose: the old tool-calling tokenizer ships as needle.model on
-# dev machines and on HF, and must never be silently picked up by this branch —
-# its vocab was fit to tool-call JSON.
+# Artifacts live flat next to the code as tokenizer.model / tokenizer.vocab.
+# Distinct from the old tool-calling tokenizer (needle.model), which must never
+# be silently picked up by this branch — its vocab was fit to tool-call JSON.
 TOKENIZER_DIR = os.path.dirname(__file__)
-TOKENIZER_PREFIX = os.path.join(TOKENIZER_DIR, "needle_lm")
+TOKENIZER_PREFIX = os.path.join(TOKENIZER_DIR, "tokenizer")
 
 PAD_ID = 0
 EOS_ID = 1
@@ -18,7 +17,7 @@ _HF_MODEL_REPO = "Cactus-Compute/needle"
 _HF_TOKENIZER_DIR = "tokenizer_lm"
 
 
-class NeedleTokenizer:
+class SANTokenizer:
     """Wrapper around SentencePiece providing the interface the codebase expects."""
 
     def __init__(self, model_path):
@@ -64,7 +63,7 @@ def _download_tokenizer_from_hf():
     from huggingface_hub import hf_hub_download
 
     os.makedirs(TOKENIZER_DIR, exist_ok=True)
-    for fname in ["needle_lm.model", "needle_lm.vocab"]:
+    for fname in ["tokenizer.model", "tokenizer.vocab"]:
         hf_hub_download(
             repo_id=_HF_MODEL_REPO,
             filename=f"{_HF_TOKENIZER_DIR}/{fname}",
@@ -86,12 +85,12 @@ def get_tokenizer():
         except Exception as e:
             raise RuntimeError(
                 f"No pretraining tokenizer at {model_path} and HF download failed ({e}). "
-                f"Run `needle tokenizer-train` (add --upload for multi-host TPU use)."
+                f"Run `san tokenizer-train` (add --upload to share it via HF hub)."
             ) from e
-    return NeedleTokenizer(model_path)
+    return SANTokenizer(model_path)
 
 
-def train_tokenizer(dataset="synth", text_field=None, vocab_size=8192,
+def train_tokenizer(dataset="synth", text_field=None, vocab_size=16384,
                     max_docs=2_000_000, force=False, upload=False):
     """Train a SentencePiece BPE tokenizer on the pretraining corpus.
 
@@ -99,7 +98,7 @@ def train_tokenizer(dataset="synth", text_field=None, vocab_size=8192,
     tokenizer sees exactly the distribution the model will train on.
     """
     from tqdm import tqdm
-    from .pretraining import resolve_dataset, stream_texts
+    from .data import resolve_dataset, stream_texts
 
     model_path = TOKENIZER_PREFIX + ".model"
     if os.path.exists(model_path) and not force:
@@ -147,7 +146,7 @@ def train_tokenizer(dataset="synth", text_field=None, vocab_size=8192,
         for ext in (".model", ".vocab"):
             api.upload_file(
                 path_or_fileobj=TOKENIZER_PREFIX + ext,
-                path_in_repo=f"{_HF_TOKENIZER_DIR}/needle_lm{ext}",
+                path_in_repo=f"{_HF_TOKENIZER_DIR}/tokenizer{ext}",
                 repo_id=_HF_MODEL_REPO,
                 repo_type="model",
             )

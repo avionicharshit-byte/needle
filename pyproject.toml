@@ -1,5 +1,5 @@
 [project]
-name = "needle"
+name = "san"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
@@ -7,6 +7,7 @@ dependencies = [
     "jaxlib",
     "flax",
     "optax",
+    "numpy",
     "datasets",
     "huggingface_hub",
     "wandb",
@@ -15,11 +16,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-tpu = ["jax[tpu]"]
 gpu = ["jax[cuda12]"]
 
 [project.scripts]
-needle = "src.cli:main"
+san = "src.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["src*"]

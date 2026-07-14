@@ -103,7 +103,7 @@ def main():
         print(HELP)
         sys.exit(0)
 
-    parser = argparse.ArgumentParser(prog="needle", add_help=False)
+    parser = argparse.ArgumentParser(prog="san", add_help=False)
     sub = parser.add_subparsers(dest="command")
 
     p = sub.add_parser("pretrain", add_help=False)
@@ -118,7 +118,7 @@ def main():
     p.add_argument("--resume-step", type=int, default=None,
                    help="Override resume step (skip this many batches)")
     p.add_argument("--batch-size", type=int, default=128,
-                   help="Global batch size in packed blocks (default: 128)")
+                   help="Per-device batch size in packed blocks (default: 128)")
     p.add_argument("--seq-len", type=int, default=1024)
     p.add_argument("--max-steps", type=int, default=100_000,
                    help="Total training steps — also the WSD schedule horizon (default: 100000)")
@@ -154,11 +154,11 @@ def main():
     p = sub.add_parser("tokenizer-train", add_help=False)
     p.add_argument("--dataset", type=str, default="synth")
     p.add_argument("--text-field", type=str, default=None)
-    p.add_argument("--vocab-size", type=int, default=8192)
+    p.add_argument("--vocab-size", type=int, default=16384)
     p.add_argument("--max-docs", type=int, default=2_000_000)
     p.add_argument("--force", action="store_true")
     p.add_argument("--upload", action="store_true",
-                   help="Upload trained tokenizer to HF (needed for multi-host TPU)")
+                   help="Upload trained tokenizer to HF hub (to share across machines)")
 
     p = sub.add_parser("sample", add_help=False)
     p.add_argument("--checkpoint", type=str, required=True)
@@ -181,53 +181,6 @@ def main():
     p.add_argument("--tasks", type=str, nargs="*", default=None,
                    help="Reserved: downstream tasks (lm-eval-harness adapter, future)")
 
-    p = sub.add_parser("tpu", add_help=False)
-    tpu_sub = p.add_subparsers(dest="tpu_action")
-
-    tp = tpu_sub.add_parser("create", add_help=False)
-    tp.add_argument("name", type=str)
-    tp.add_argument("--type", dest="accel_type", type=str, default="v6e-8")
-    tp.add_argument("--version", type=str, default=None,
-                    help="Software version (auto-detected from --type if omitted)")
-    tp.add_argument("--preemptible", action="store_true", default=False,
-                    help="Create a preemptible (spot) TPU VM")
-
-    tp = tpu_sub.add_parser("connect", add_help=False)
-    tp.add_argument("name", type=str)
-    tp.add_argument("--zone", type=str, default=None)
-
-    tp = tpu_sub.add_parser("setup", add_help=False)
-    tp.add_argument("name", type=str)
-    tp.add_argument("--zone", type=str, default=None)
-
-    tp = tpu_sub.add_parser("sync", add_help=False)
-    tp.add_argument("name", type=str)
-    tp.add_argument("--zone", type=str, default=None)
-
-    tp = tpu_sub.add_parser("pretrain", add_help=False)
-    tp.add_argument("name", type=str)
-    tp.add_argument("--zone", type=str, default=None)
-    tp.add_argument("train_args", nargs=argparse.REMAINDER,
-                    help="Extra args passed to needle pretrain")
-
-    tp = tpu_sub.add_parser("claude", add_help=False)
-    tp.add_argument("name", type=str)
-    tp.add_argument("--zone", type=str, default=None)
-
-    tp = tpu_sub.add_parser("stop", add_help=False)
-    tp.add_argument("name", type=str)
-    tp.add_argument("--zone", type=str, default=None)
-
-    tp = tpu_sub.add_parser("start", add_help=False)
-    tp.add_argument("name", type=str)
-    tp.add_argument("--zone", type=str, default=None)
-
-    tp = tpu_sub.add_parser("delete", add_help=False)
-    tp.add_argument("name", type=str)
-    tp.add_argument("--zone", type=str, default=None)
-
-    tpu_sub.add_parser("list", add_help=False)
-
     args = parser.parse_args()
 
     if not args.command:
@@ -235,9 +188,6 @@ def main():
         sys.exit(0)
 
     if args.command == "pretrain":
-        import jax
-        if os.path.exists("/dev/accel0"):
-            jax.distributed.initialize()
         from .pretrain import pretrain
         pretrain(args)
     elif args.command == "tokenizer-train":
@@ -253,6 +203,3 @@ def main():
     elif args.command == "eval":
         from .eval import main as eval_main_fn
         eval_main_fn(args)
-    elif args.command == "tpu":
-        from .tpu import tpu_dispatch
-        tpu_dispatch(args)

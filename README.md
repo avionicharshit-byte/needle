@@ -3,7 +3,6 @@
 We show that MLPs can be completely dropped from transformer networks.
 
 ```
-d=512, 8H/4KV, BPE=8192
       ┌───────────────┐
       │  Next Token   │
       └───────┬───────┘
@@ -17,7 +16,7 @@ d=512, 8H/4KV, BPE=8192
       │   ZCRMSNorm   │
       └───────┬───────┘
       ┌───────┴────────┐
-      │  Block x 20    │
+      │  Block x N     │
       │ ┌────────────┐ │
       │ │ ZCRMSNorm  │ │
       │ │ Masked Self│ │
@@ -75,16 +74,16 @@ Without FFN, there is no per-position nonlinear rewriting per layer. This makes 
 git clone https://github.com/cactus-compute/needle.git
 cd needle && source ./setup
 
-# 1. Train the tokenizer on the pretraining corpus (once; --upload for TPU pods)
-needle tokenizer-train
+# 1. Train the tokenizer on the pretraining corpus (once; --upload to share via HF)
+san tokenizer-train
 
 # 2. Pretrain the SAN arm
-needle pretrain --wandb
+san pretrain --wandb
 
 # 3. Control arms
-needle pretrain --ffn --wandb                       # + FFN
-needle pretrain --optimizer adamw --wandb           # - Muon
-needle pretrain --ffn --optimizer adamw --wandb     # standard transformer
+san pretrain --ffn --wandb                       # + FFN
+san pretrain --optimizer adamw --wandb           # - Muon
+san pretrain --ffn --optimizer adamw --wandb     # standard transformer
 ```
 
 Swap datasets with `--dataset fineweb-edu` or any HF repo id + `--text-field`.
@@ -94,12 +93,14 @@ the loss are masked at document boundaries.
 ## CLI
 
 ```
-needle pretrain          Streaming pretraining
-needle eval              Val loss/PPL + throughput + sample generations
-needle sample            Prompt continuation from a checkpoint
-needle tokenizer-train   Train the SentencePiece tokenizer (vocab 8192)
-needle tpu <action>      TPU management (see docs/tpu.md)
+san pretrain          Streaming pretraining
+san eval              Val loss/PPL + throughput + sample generations
+san sample            Prompt continuation from a checkpoint
+san tokenizer-train   Train the SentencePiece tokenizer (vocab 16384)
 ```
+
+Training is single-node data-parallel via pmap over all local GPUs (e.g. one
+RunPod node with 8x H100) — no launcher needed, just `san pretrain`.
 
 Key pretrain flags: `--ffn/--no-ffn`, `--optimizer {muon,adamw}`, `--dataset`,
 `--seq-len`, `--batch-size` (per device), `--max-steps` (also the WSD schedule
@@ -109,15 +110,15 @@ SVD entropy), `--upload-checkpoints`.
 
 ## Conventions
 
-- **LR scaling across devices:** Adam LR scales linearly (`--lr × total_devices`);
-  Muon LR scales by sqrt (`--muon-lr × sqrt(total_devices)`). Both optimizer arms
+- **LR scaling across devices:** Adam LR scales linearly (`--lr × num_gpus`);
+  Muon LR scales by sqrt (`--muon-lr × sqrt(num_gpus)`). Both optimizer arms
   inherit the same convention.
 - **Weight decay** applies to Dense kernels only, identically in both optimizer
   arms (0.01).
 - **Checkpoints** are format v2 (`{format_version, params, config, step, run}`),
   named `<--name>.pkl`. Old encoder-decoder/tool-calling checkpoints and the old
   `needle.model` tokenizer are incompatible with this branch by design.
-- **Batch size** is per device: global batch = `--batch-size × devices × hosts`.
+- **Batch size** is per device: global batch = `--batch-size × local devices`.
 
 ## Tests
 

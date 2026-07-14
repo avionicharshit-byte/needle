@@ -7,7 +7,7 @@ import numpy as np
 import optax
 
 from .tokenizer import get_tokenizer
-from .pretraining import resolve_dataset, build_val_set
+from .data import resolve_dataset, build_val_set
 from .architecture import SimpleAttentionNetwork, make_causal_packing_mask
 from .run import load_checkpoint, generate
 

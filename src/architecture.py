@@ -32,7 +32,7 @@ class ZCRMSNorm(nn.Module):
 
 @dataclass
 class TransformerConfig:
-    vocab_size: int = 8192
+    vocab_size: int = 16384
     d_model: int = 512
     num_heads: int = 8
     num_kv_heads: int = 4

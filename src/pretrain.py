@@ -5,10 +5,11 @@ fixed-length rows with segment IDs, and trains with doc-boundary-masked CE +
 z-loss. Architecture arms (--ffn/--no-ffn) and optimizer arms (--optimizer
 muon|adamw) share this single entry point.
 
+Single-node data parallelism via pmap over all local devices (e.g. 8x H100).
+
 Usage:
-    needle pretrain --wandb
-    needle pretrain --ffn --optimizer adamw --wandb   # control arm
-    needle tpu pretrain large -- --wandb
+    san pretrain --wandb
+    san pretrain --ffn --optimizer adamw --wandb   # control arm
 """
 
 import math
@@ -23,7 +24,7 @@ import optax
 from tqdm import tqdm
 
 from .tokenizer import get_tokenizer
-from .pretraining import (
+from .data import (
     PrefetchStream,
     build_val_set,
     packed_block_stream,
@@ -84,14 +85,14 @@ def _val_step(state, tokens, seg_ids):
     return nll_sum, count
 
 
-def _run_val(p_val_step, state, val_tokens, val_segs, host_slice, num_devices):
+def _run_val(p_val_step, state, val_tokens, val_segs, num_devices):
     total_nll, total_count = 0.0, 0.0
     for tokens, segs in zip(val_tokens, val_segs):
-        tk = shard_batch(tokens[host_slice], num_devices)
-        sg = shard_batch(segs[host_slice], num_devices)
+        tk = shard_batch(tokens, num_devices)
+        sg = shard_batch(segs, num_devices)
         nll, count = p_val_step(state, tk, sg)
-        total_nll += float(nll.addressable_shards[0].data[0])
-        total_count += float(count.addressable_shards[0].data[0])
+        total_nll += float(nll[0])
+        total_count += float(count[0])
     loss = total_nll / max(total_count, 1.0)
     return loss, math.exp(min(loss, 20))
 
@@ -138,19 +139,15 @@ def _rank_metrics(model, params, tokens, segs, max_rows=2, max_len=257):
 
 def pretrain(args):
     num_devices = jax.local_device_count()
-    num_hosts = jax.process_count()
-    host_id = jax.process_index()
-    total_devices = jax.device_count()
-    is_main = host_id == 0
 
-    use_wandb = args.wandb and is_main
+    use_wandb = args.wandb
     if use_wandb:
         import wandb
         if wandb.run is None:
-            wandb.init(project="needle-san", name=args.name, config=vars(args))
+            wandb.init(project="san", name=args.name, config=vars(args))
 
     print(f"\n[1/4] Detecting devices...")
-    print(f"      {num_devices} local, {total_devices} total across {num_hosts} hosts")
+    print(f"      {num_devices} device(s): {jax.devices()[0].device_kind}")
 
     print(f"\n[2/4] Loading tokenizer and dataset spec...")
     tokenizer = get_tokenizer()
@@ -200,14 +197,13 @@ def pretrain(args):
         f"Config vocab {config.vocab_size} != tokenizer vocab {tokenizer.vocab_size}"
     )
 
-    effective_batch_size = args.batch_size * num_devices
-    global_batch_size = effective_batch_size * num_hosts
+    global_batch_size = args.batch_size * num_devices
     seq_len = args.seq_len
 
     total_steps = args.max_steps
     warmup_steps = max(1, int(total_steps * args.warmup_ratio))
-    scaled_lr = args.lr * total_devices
-    muon_lr = args.muon_lr * math.sqrt(total_devices)
+    scaled_lr = args.lr * num_devices
+    muon_lr = args.muon_lr * math.sqrt(num_devices)
 
     print(f"\n[3/4] Building val set ({args.val_blocks} blocks)...")
     val_tokens, val_segs, val_docs = build_val_set(
@@ -256,30 +252,28 @@ def pretrain(args):
     checkpoint_dir = getattr(args, "checkpoint_dir", "checkpoints")
     os.makedirs(checkpoint_dir, exist_ok=True)
 
-    if is_main:
-        decay_steps = max(1, int(total_steps * args.decay_ratio))
-        stable_steps = total_steps - warmup_steps - decay_steps
-        arch = "attention-only (SAN)" if config.no_feedforward else f"FFN d_ff={config.d_ff}"
-        print(f"\n  ─────────────────────────────────────")
-        print(f"  Pretraining on {spec.repo}")
-        print(f"  ─────────────────────────────────────")
-        print(f"  Parameters    {param_count:>12,}")
-        print(f"  Architecture  {arch:>12}")
-        print(f"  d_model       {config.d_model:>12}")
-        print(f"  Heads         {config.num_heads:>7} ({config.num_kv_heads} KV)")
-        print(f"  Layers        {config.num_layers:>12}")
-        print(f"  Seq len       {seq_len:>12}")
-        print(f"  Dtype         {config.dtype:>12}")
-        print(f"  Optimizer     {args.optimizer:>12}")
-        print(f"  ─────────────────────────────────────")
-        print(f"  Hosts         {num_hosts:>12}")
-        print(f"  Devices       {num_devices:>5}/host, {total_devices} total")
-        print(f"  Batch         {args.batch_size:>7} x {total_devices} = {global_batch_size}")
-        print(f"  Adam LR       {args.lr:>7} x {total_devices} = {scaled_lr}")
-        print(f"  Muon LR       {args.muon_lr:>7.4f} -> {muon_lr:.4f}")
-        print(f"  Schedule      {warmup_steps}w / {stable_steps}s / {decay_steps}d (WSD)")
-        print(f"  Total steps   {total_steps:>12,}")
-        print(f"  ─────────────────────────────────────\n")
+    decay_steps = max(1, int(total_steps * args.decay_ratio))
+    stable_steps = total_steps - warmup_steps - decay_steps
+    arch = "attention-only (SAN)" if config.no_feedforward else f"FFN d_ff={config.d_ff}"
+    print(f"\n  ─────────────────────────────────────")
+    print(f"  Pretraining on {spec.repo}")
+    print(f"  ─────────────────────────────────────")
+    print(f"  Parameters    {param_count:>12,}")
+    print(f"  Architecture  {arch:>12}")
+    print(f"  d_model       {config.d_model:>12}")
+    print(f"  Heads         {config.num_heads:>7} ({config.num_kv_heads} KV)")
+    print(f"  Layers        {config.num_layers:>12}")
+    print(f"  Seq len       {seq_len:>12}")
+    print(f"  Dtype         {config.dtype:>12}")
+    print(f"  Optimizer     {args.optimizer:>12}")
+    print(f"  ─────────────────────────────────────")
+    print(f"  Devices       {num_devices:>12}")
+    print(f"  Batch         {args.batch_size:>7} x {num_devices} = {global_batch_size}")
+    print(f"  Adam LR       {args.lr:>7} x {num_devices} = {scaled_lr}")
+    print(f"  Muon LR       {args.muon_lr:>7.4f} -> {muon_lr:.4f}")
+    print(f"  Schedule      {warmup_steps}w / {stable_steps}s / {decay_steps}d (WSD)")
+    print(f"  Total steps   {total_steps:>12,}")
+    print(f"  ─────────────────────────────────────\n")
 
     # Fresh data ordering on resume (avoid re-seeing pre-crash examples)
     stream_seed = args.seed + resume_step
@@ -289,21 +283,20 @@ def pretrain(args):
         prefetch=8,
     )
 
-    host_slice = slice(host_id * effective_batch_size, (host_id + 1) * effective_batch_size)
     global_step = resume_step
-    pbar = tqdm(desc="Pretrain", total=total_steps, initial=resume_step, disable=not is_main)
+    pbar = tqdm(desc="Pretrain", total=total_steps, initial=resume_step)
 
     for tokens, segs in batch_stream:
         if global_step >= total_steps:
             break
         t0 = time.perf_counter()
 
-        tokens_b = shard_batch(tokens[host_slice], num_devices)
-        segs_b = shard_batch(segs[host_slice], num_devices)
+        tokens_b = shard_batch(tokens, num_devices)
+        segs_b = shard_batch(segs, num_devices)
         state, loss, ce = p_train_step(state, tokens_b, segs_b)
 
-        loss_val = float(loss.addressable_shards[0].data[0])
-        ce_val = float(ce.addressable_shards[0].data[0])
+        loss_val = float(loss[0])
+        ce_val = float(ce[0])
         ppl = math.exp(min(ce_val, 20))
         dt = time.perf_counter() - t0
         global_step += 1
@@ -323,40 +316,34 @@ def pretrain(args):
             }, step=global_step)
 
         if global_step % args.eval_every == 0:
-            val_loss, val_ppl = _run_val(p_val_step, state, val_tokens, val_segs,
-                                         host_slice, num_devices)
-            if is_main:
-                host_params = _unreplicate(state).params
-                metrics = {"val/loss": val_loss, "val/ppl": val_ppl}
-                metrics.update(_gate_metrics(host_params))
-                log_rank_every = getattr(args, "log_rank_every", 0)
-                if log_rank_every and global_step % log_rank_every == 0:
-                    metrics.update(_rank_metrics(model, host_params,
-                                                 val_tokens[0][host_slice],
-                                                 val_segs[0][host_slice]))
-                pbar.write(f"  [step {global_step}] val loss {val_loss:.4f}, ppl {val_ppl:.2f}")
-                if use_wandb:
-                    import wandb
-                    wandb.log(metrics, step=global_step)
+            val_loss, val_ppl = _run_val(p_val_step, state, val_tokens, val_segs, num_devices)
+            host_params = _unreplicate(state).params
+            metrics = {"val/loss": val_loss, "val/ppl": val_ppl}
+            metrics.update(_gate_metrics(host_params))
+            log_rank_every = getattr(args, "log_rank_every", 0)
+            if log_rank_every and global_step % log_rank_every == 0:
+                metrics.update(_rank_metrics(model, host_params,
+                                             val_tokens[0], val_segs[0]))
+            pbar.write(f"  [step {global_step}] val loss {val_loss:.4f}, ppl {val_ppl:.2f}")
+            if use_wandb:
+                import wandb
+                wandb.log(metrics, step=global_step)
 
-        if is_main and global_step % args.save_every == 0:
+        if global_step % args.save_every == 0:
             _save_checkpoint(state, config, run_meta, checkpoint_dir, args.name, global_step,
                              upload=getattr(args, "upload_checkpoints", False))
 
     batch_stream.close()
     pbar.close()
 
-    if is_main:
-        ckpt_path = _save_checkpoint(state, config, run_meta, checkpoint_dir, args.name, global_step,
-                                     upload=getattr(args, "upload_checkpoints", False))
-        print(f"\nPretraining complete. {global_step} steps.")
-        print(f"Checkpoint: {ckpt_path}")
+    ckpt_path = _save_checkpoint(state, config, run_meta, checkpoint_dir, args.name, global_step,
+                                 upload=getattr(args, "upload_checkpoints", False))
+    print(f"\nPretraining complete. {global_step} steps.")
+    print(f"Checkpoint: {ckpt_path}")
 
     if use_wandb:
         import wandb
         wandb.finish()
-
-    jax.experimental.multihost_utils.sync_global_devices("pretrain_done")
 
 
 def _save_checkpoint(state, config, run_meta, checkpoint_dir, name, global_step, upload=False):
