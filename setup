@@ -82,9 +82,18 @@ else
     pip install -U jax
 fi
 
-# Sanity check: report the JAX backend that was actually selected
-python -c "import jax; print('JAX devices:', jax.devices())" 2>/dev/null || \
+# Sanity check: report the JAX backend that was actually selected.
+# Do NOT suppress stderr — if the CUDA plugin fails to load, the fallback
+# warning printed there is the only clue why JAX is on CPU.
+python -c "import jax; print('JAX devices:', jax.devices())" || \
     echo "Warning: jax import failed; check the install above."
+if ! python -c "import jax, sys; sys.exit(0 if any(d.platform == 'gpu' for d in jax.devices()) else 1)" 2>/dev/null; then
+    if command -v nvidia-smi &>/dev/null && nvidia-smi &>/dev/null; then
+        echo "WARNING: an NVIDIA GPU is present but JAX selected CPU — training would"
+        echo "run on CPU silently. Check the warning above (driver/wheel mismatch is"
+        echo "the usual cause) before starting any runs."
+    fi
+fi
 
 if [ -f /sys/kernel/mm/transparent_hugepage/enabled ]; then
     echo "Enabling transparent hugepages..."
