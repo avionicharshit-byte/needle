@@ -44,12 +44,7 @@ class TransformerConfig:
     dtype: str = "bfloat16"
     activation: str = "swiglu"
     no_feedforward: bool = True
-    # flash: fused attention via jax.nn.dot_product_attention (auto backend:
-    # cudnn flash on H100, XLA elsewhere). No (B,H,T,T) score materialization.
     flash: bool = True
-    # remat: per-layer gradient checkpointing. Only needed when activations
-    # exceed memory (naive attention at long seq_len, or much larger models).
-    remat: bool = False
 
     def __init__(self, **kwargs):
         valid = {f.name for f in self.__dataclass_fields__.values()}
@@ -237,9 +232,8 @@ class Stack(nn.Module):
         dt = cfg.jax_dtype
         x = x.astype(dt)
 
-        body = nn.remat(_ScanBody) if cfg.remat else _ScanBody
         ScanBlock = nn.scan(
-            body,
+            _ScanBody,
             variable_axes={"params": 0},
             split_rngs={"params": True},
             length=cfg.num_layers,

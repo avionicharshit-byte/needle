@@ -239,17 +239,17 @@ Run naming: `{arch}_{opt}_{size}_{tokens}_{seed}`, e.g. `san_muon_base_105B_s42`
 - All hyperparameters + E0 results in appendix. Release code, tokenizer,
   E1 checkpoints, wandb logs.
 
-## 8. Compute budget (@~3M tok/s; re-pin from first base run)
+## 8. Compute budget (@2.3M tok/s, measured base config 2026-07-15, cudnn attention)
 
 | Block | Tokens | Node-hours |
 |---|---|---|
-| E0 | 60B | ~5.5 |
-| E1 | 840B | ~76 |
-| E2 | 120B | ~11 |
-| E3 | 300B | ~27 |
-| E5 | 180B | ~16 |
-| Ladder | 180B | ~21 |
-| **Total** | **~1.68T** | **~157h ≈ 6.5 node-days** (~8–10 calendar days) |
+| E0 | 60B | ~7 |
+| E1 | 840B | ~101 |
+| E2 | 120B | ~14.5 |
+| E3 | 300B | ~36 |
+| E5 | 180B | ~22 |
+| Ladder | 180B | ~24 (mixed sizes) |
+| **Total** | **~1.68T** | **~205h ≈ 8.5 node-days** (~10–12 calendar days) |
 
 Trim path (breaks nothing, −350B): drop xl ladder pair; E5 → 2M-docs cells
 only; drop sandwich cell; isoF/isoD at 30B (same horizon as E2). Only if

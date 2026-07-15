@@ -192,8 +192,6 @@ def pretrain(args):
             dtype=args.dtype,
             activation=args.activation,
             no_feedforward=not args.ffn,
-            flash=getattr(args, "flash", True),
-            remat=getattr(args, "remat", False),
         )
 
     assert config.vocab_size == tokenizer.vocab_size, (

@@ -161,12 +161,3 @@ def test_flash_matches_naive():
     logits_flash = SimpleAttentionNetwork(tiny_config(dtype="float32", flash=True)).apply(
         {"params": params}, tokens)
     np.testing.assert_allclose(np.asarray(logits_naive), np.asarray(logits_flash), rtol=2e-4, atol=2e-4)
-
-
-def test_remat_matches():
-    """Gradient checkpointing must not change the forward computation."""
-    params = init_model(tiny_config(dtype="float32", remat=False))[1]
-    tokens = jnp.arange(2 * 16, dtype=jnp.int32).reshape(2, 16) % 64
-    a = SimpleAttentionNetwork(tiny_config(dtype="float32", remat=False)).apply({"params": params}, tokens)
-    b = SimpleAttentionNetwork(tiny_config(dtype="float32", remat=True)).apply({"params": params}, tokens)
-    np.testing.assert_allclose(np.asarray(a), np.asarray(b), rtol=1e-6, atol=1e-6)
