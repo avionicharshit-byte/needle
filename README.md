@@ -113,7 +113,7 @@ Without FFN, there is no per-position nonlinear rewriting per layer. This makes 
 
 ```bash
 git clone https://github.com/cactus-compute/needle.git
-cd needle && source ./setup
+cd needle && git checkout neurips && source ./setup
 
 # 1. Train the tokenizer on the pretraining corpus (once; --upload to share via HF)
 san tokenizer-train

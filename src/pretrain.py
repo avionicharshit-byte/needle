@@ -282,7 +282,8 @@ def pretrain(args):
     milestone_steps = sorted({max(1, int(total_steps * f)) for f in (0.25, 0.5, 0.75)})
     if resume_step == 0:
         _save_checkpoint(state, config, run_meta, checkpoint_dir, args.name, 0,
-                         upload=False, milestone=True)  # init state = the 0% point
+                         upload=getattr(args, "upload_checkpoints", False),
+                         milestone=True)  # init state = the 0% point
 
     decay_steps = max(1, int(total_steps * args.decay_ratio))
     stable_steps = total_steps - warmup_steps - decay_steps
