@@ -201,10 +201,21 @@ def pretrain(args):
     global_batch_size = args.batch_size * num_devices
     seq_len = args.seq_len
 
+    # E0-locked per-arm LR defaults (experiments.md §11, 2026-07-15); explicit
+    # flags override. Muon runs keep the adam side at 3e-4 — as swept in E0.
+    is_ffn = not config.no_feedforward
+    base_muon_lr = args.muon_lr if args.muon_lr is not None else (0.04 if is_ffn else 0.02)
+    if args.lr is not None:
+        base_lr = args.lr
+    elif args.optimizer == "adamw":
+        base_lr = 2.4e-3 if is_ffn else 6e-4
+    else:
+        base_lr = 3e-4
+
     total_steps = args.max_steps
     warmup_steps = max(1, int(total_steps * args.warmup_ratio))
-    scaled_lr = args.lr * num_devices
-    muon_lr = args.muon_lr * math.sqrt(num_devices)
+    scaled_lr = base_lr * num_devices
+    muon_lr = base_muon_lr * math.sqrt(num_devices)
     # host-side copies of the schedules, for logging only
     adam_schedule = _wsd_schedule(scaled_lr, total_steps, warmup_steps, args.decay_ratio)
     muon_schedule = _wsd_schedule(muon_lr, total_steps, warmup_steps, args.decay_ratio)
@@ -300,8 +311,8 @@ def pretrain(args):
     print(f"  ─────────────────────────────────────")
     print(f"  Devices       {num_devices:>12}")
     print(f"  Batch         {args.batch_size:>7} x {num_devices} = {global_batch_size}")
-    print(f"  Adam LR       {args.lr:>7} x {num_devices} = {scaled_lr}")
-    print(f"  Muon LR       {args.muon_lr:>7.4f} -> {muon_lr:.4f}")
+    print(f"  Adam LR       {base_lr:>7} x {num_devices} = {scaled_lr}")
+    print(f"  Muon LR       {base_muon_lr:>7.4f} -> {muon_lr:.4f}")
     print(f"  Schedule      {warmup_steps}w / {stable_steps}s / {decay_steps}d (WSD)")
     print(f"  Total steps   {total_steps:>12,}")
     print(f"  ─────────────────────────────────────\n")

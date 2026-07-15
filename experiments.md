@@ -77,9 +77,16 @@ Steps ≈ tokens/1.05M (5B→5k, 20B→20k, 30B→30k, 105B→100k). Append to e
 pretrain command: `--data-dir <corpus> --upload-checkpoints` (HF is the
 source of truth; resume = same command + `--checkpoint checkpoints/<name>.pkl`).
 Arms: SAN = defaults; FFN-isoP/isoF/isoD = `--ffn --num-layers 4/9/20`.
+LRs default to the E0 locks per arm (SAN/FFN × muon/adamw, resolved at
+runtime from the config; muon runs keep adam side at 3e-4 as swept) —
+commands need no LR flags; explicit flags override. isoF/isoD inherit the
+isoP locks (stated convention).
 
-### E0 — LR fairness sweep (12 × 5B = 60B)
-Dominant LR per arm, 3 points; winners carry into all commands below.
+### E0 — LR fairness sweep (as run: 16 × 5B = 80B)
+Dominant LR per arm, 3 points; boundary rule: a winner on a sweep edge gets
+one extension per round until the curve turns. Winners carry into all
+commands below. E0 ran on the HF streaming path (pre-corpus) — reproduce
+without `--data-dir`.
 
 ```bash
 for mlr in 0.01 0.02 0.04; do
@@ -94,6 +101,14 @@ for lr in 1.5e-4 3e-4 6e-4; do
   san pretrain --ffn --num-layers 4 --optimizer adamw --lr $lr --max-steps 5000 \
       --wandb --name e0_ffnisop_adamw_lr$lr
 done
+san pretrain --ffn --num-layers 4 --optimizer muon --muon-lr 0.08 --max-steps 5000 \
+    --wandb --name e0_ffnisop_muon_mlr0.08
+san pretrain --optimizer adamw --lr 1.2e-3 --max-steps 5000 \
+    --wandb --name e0_san_adamw_lr1.2e-3
+san pretrain --ffn --num-layers 4 --optimizer adamw --lr 1.2e-3 --max-steps 5000 \
+    --wandb --name e0_ffnisop_adamw_lr1.2e-3
+san pretrain --ffn --num-layers 4 --optimizer adamw --lr 2.4e-3 --max-steps 5000 \
+    --wandb --name e0_ffnisop_adamw_lr2.4e-3
 ```
 
 ### E1 — Headline (8 × 105B = 840B)
@@ -258,15 +273,6 @@ Run naming: `{arch}_{opt}_{size}_{tokens}_{seed}`, e.g. `san_muon_base_105B_s42`
 
 ## 10. Results log
 
-**2026-07-15 — infra:** cudnn attention was silently falling back to unfused
-XLA (auto dispatcher never tries cudnn with a mask); explicit
-`implementation="cudnn"` accepted the doc mask: 6.5× on the op, 2.75×
-end-to-end → base config 2.3M tok/s (§8 re-pinned). Corpus tokenized:
-68.33B tokens / 136.7GB, uploading to HF.
-
-**2026-07-15 — infra:** remat is mandatory at 20L/batch 64/seq 2048 (~70GiB
-peak without, even with fused attention) — removing it OOM'd the first
-extension cell; re-enabled permanently. Throughput numbers already included it.
 
 **2026-07-15 — E0 complete incl. extensions (15 cells, val/loss @5k):**
 
@@ -275,16 +281,10 @@ extension cell; re-enabled permanently. Throughput numbers already included it.
 | SAN muon | 2.248 | **2.245** | 2.251 | — | — | **LOCKED 0.02** (interior; landscape flat 2.245–2.251 across 4×) |
 | FFN muon | 2.223 | 2.224 | **2.216** | 2.237 (turned) | — | **LOCKED 0.04** (interior after extension; 0.5×/1× inversion ~0.001 = noise) |
 | SAN adamw | 2.361 | 2.293 | **2.267** | 2.321 (turned) | — | **LOCKED 6e-4** (interior after extension) |
-| FFN adamw | 2.305 | 2.254 | 2.230 | **2.219** (still ↓, decelerating) | running | pending 2.4e-3 |
+| FFN adamw | 2.305 | 2.254 | 2.230 | 2.219 | **2.199** | **LOCKED 2.4e-3** (16× ext 4.8e-3 = 2.216, turned + mid-run val bounce) |
 
-- P6-direction note strengthened at tuned LRs (still unseeded/5B): muon−adamw
-  gap ≈ 0.026 on SAN vs ≈ 0.003 on FFN — the predicted interaction shape.
-
-- Default LRs were centered too low for adamw arms; sweep working as intended.
-- Preliminary P6-direction note (unseeded, 5B tokens — not evidence): muon−adamw
-  gap larger for SAN (0.022) than FFN (0.014).
-- Best-FFN leads best-SAN by ~0.03 nats at 5B — expected at data-limited scale;
-  E2@30B is the first real comparison.
-- Ladder ran early by accident: san_tiny complete (valid), san_small died at
-  13.5k (HF streaming reset — memmap corpus eliminates this class), san_large
-  killed. FFN ladder cells deliberately held until E0 LRs lock.
+- E0 CLOSED. Locks: SAN muon 0.02 · FFN muon 0.04 · SAN adamw 6e-4 · FFN adamw 2.4e-3.
+- Striking accident @4.8e-3: ALL FFN gates collapsed (0.02–0.18, mean 0.07)
+  while attn gates stayed structured — under LR stress the standard
+  transformer self-pruned into attention-only form and still hit 2.216.
+  H1-flavored, from an undesigned direction (caveat: gated off ≠ removed).

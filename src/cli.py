@@ -132,8 +132,11 @@ def main():
     p.add_argument("--optimizer", type=str, default="muon", choices=["muon", "adamw"])
     p.add_argument("--ffn", action=argparse.BooleanOptionalAction, default=False,
                    help="Include FFN sublayers (control arm). Default: attention-only SAN")
-    p.add_argument("--lr", type=float, default=3e-4)
-    p.add_argument("--muon-lr", type=float, default=0.02)
+    p.add_argument("--lr", type=float, default=None,
+                   help="Adam LR. Default: E0 locks — adamw runs: SAN 6e-4 / FFN 2.4e-3; "
+                        "muon runs keep the adam side at 3e-4 (as swept)")
+    p.add_argument("--muon-lr", type=float, default=None,
+                   help="Muon LR. Default: E0 locks — SAN 0.02 / FFN 0.04")
     p.add_argument("--d-model", type=int, default=512)
     p.add_argument("--num-heads", type=int, default=8)
     p.add_argument("--num-kv-heads", type=int, default=4)
