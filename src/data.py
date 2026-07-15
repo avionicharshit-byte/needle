@@ -343,7 +343,23 @@ def tokenize_corpus(dataset="synth", text_field=None, out_dir=None, force=False,
 
     dl_dir = os.path.join(out_dir, "_dl")
     todo = [f for f in files if f not in manifest["done_files"]]
+
+    # Pre-flight: fail before hours of work, not at the disk quota mid-run.
+    # Estimate remaining need from completed shards (or ~2 bytes/token × 70B
+    # for a fresh SYNTH run), + 1GB working space for the shard download.
+    done_n = len(manifest["done_files"])
+    per_shard = manifest["tokens"] * 2 / max(done_n, 1) if done_n else 280e6
+    need = per_shard * len(todo) + 1e9
+    free = os.statvfs(out_dir).f_frsize * os.statvfs(out_dir).f_bavail
+    if free < need:
+        raise RuntimeError(
+            f"~{need / 1e9:.0f} GB still needed at {out_dir} but only "
+            f"{free / 1e9:.0f} GB free — grow the volume before starting "
+            f"(progress so far is preserved; re-run to resume)."
+        )
+
     t0 = _time.time()
+    session_start_tokens = manifest["tokens"]  # rate must exclude resumed work
     with open(bin_path, "ab") as bin_f, open(off_path, "ab") as off_f:
         for i, fname in enumerate(todo):
             local = hf_hub_download(spec.repo, fname, repo_type="dataset", local_dir=dl_dir)
@@ -360,7 +376,7 @@ def tokenize_corpus(dataset="synth", text_field=None, out_dir=None, force=False,
             except OSError:
                 pass
             done = len(manifest["done_files"])
-            rate = manifest["tokens"] / max(_time.time() - t0, 1)
+            rate = (manifest["tokens"] - session_start_tokens) / max(_time.time() - t0, 1)
             print(f"[corpus] {done}/{len(files)} shards | {manifest['docs']:,} docs | "
                   f"{manifest['tokens']:,} tokens | ~{rate/1e6:.1f}M tok/s this session",
                   flush=True)
