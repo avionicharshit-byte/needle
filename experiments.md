@@ -239,24 +239,7 @@ Run naming: `{arch}_{opt}_{size}_{tokens}_{seed}`, e.g. `san_muon_base_105B_s42`
 - All hyperparameters + E0 results in appendix. Release code, tokenizer,
   E1 checkpoints, wandb logs.
 
-## 8. Compute budget (@2.3M tok/s, measured base config 2026-07-15, cudnn attention)
-
-| Block | Tokens | Node-hours |
-|---|---|---|
-| E0 | 60B | ~7 |
-| E1 | 840B | ~101 |
-| E2 | 120B | ~14.5 |
-| E3 | 300B | ~36 |
-| E5 | 180B | ~22 |
-| Ladder | 180B | ~24 (mixed sizes) |
-| **Total** | **~1.68T** | **~205h ≈ 8.5 node-days** (~10–12 calendar days) |
-
-Trim path (breaks nothing, −350B): drop xl ladder pair; E5 → 2M-docs cells
-only; drop sandwich cell; isoF/isoD at 30B (same horizon as E2). Only if
-forced: E3 at 10B. Never: E0, E2, headline seeds, gate-mirror, evals.
-Divergent cells (no-residual, deep no-gate) may be stopped early.
-
-## 9. Decision gates
+## 8. Decision gates
 
 - **After E0+E2 (~1 day):** SAN+muon not near FFN-isoP at 30B → stop,
   diagnose; if architectural, pivot to trade-off characterization + H2 + H3.
@@ -264,7 +247,7 @@ Divergent cells (no-residual, deep no-gate) may be stopped early.
 - **Gated ≈ ReZero:** expected; recipe, not novelty.
 - **SAN wins only iso-FLOP:** report both matchings honestly.
 
-## 10. Priority order
+## 9. Priority order
 
 1. E0 (read tok_s → re-pin §8).
 2. E2 → gate decision.
@@ -273,7 +256,7 @@ Divergent cells (no-residual, deep no-gate) may be stopped early.
 5. E5.
 6. Writing.
 
-## 11. Results log
+## 10. Results log
 
 **2026-07-15 — infra:** cudnn attention was silently falling back to unfused
 XLA (auto dispatcher never tries cudnn with a mask); explicit
@@ -285,14 +268,17 @@ end-to-end → base config 2.3M tok/s (§8 re-pinned). Corpus tokenized:
 peak without, even with fused attention) — removing it OOM'd the first
 extension cell; re-enabled permanently. Throughput numbers already included it.
 
-**2026-07-15 — E0 complete (12 cells, val/loss @5k):**
+**2026-07-15 — E0 complete incl. extensions (15 cells, val/loss @5k):**
 
-| Arm | 0.5× | 1× | 2× | Verdict |
-|---|---|---|---|---|
-| SAN muon | pending readout | **2.245** | 2.251 | 0.02 interior — lock pending mlr0.01 final |
-| FFN muon | pending readout | 2.224 | **2.216** | top boundary → extension mlr0.08 |
-| SAN adamw | 2.361 | 2.293 | **2.267** | monotone ↑LR, top boundary → extension 1.2e-3 |
-| FFN adamw | 2.305 | 2.254 | **2.230** | monotone ↑LR, top boundary → extension 1.2e-3 |
+| Arm | 0.5× | 1× | 2× | 4× ext | 8× ext | Verdict |
+|---|---|---|---|---|---|---|
+| SAN muon | 2.248 | **2.245** | 2.251 | — | — | **LOCKED 0.02** (interior; landscape flat 2.245–2.251 across 4×) |
+| FFN muon | 2.223 | 2.224 | **2.216** | 2.237 (turned) | — | **LOCKED 0.04** (interior after extension; 0.5×/1× inversion ~0.001 = noise) |
+| SAN adamw | 2.361 | 2.293 | **2.267** | 2.321 (turned) | — | **LOCKED 6e-4** (interior after extension) |
+| FFN adamw | 2.305 | 2.254 | 2.230 | **2.219** (still ↓, decelerating) | running | pending 2.4e-3 |
+
+- P6-direction note strengthened at tuned LRs (still unseeded/5B): muon−adamw
+  gap ≈ 0.026 on SAN vs ≈ 0.003 on FFN — the predicted interaction shape.
 
 - Default LRs were centered too low for adamw arms; sweep working as intended.
 - Preliminary P6-direction note (unseeded, 5B tokens — not evidence): muon−adamw
