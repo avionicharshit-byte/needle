@@ -272,3 +272,33 @@ Divergent cells (no-residual, deep no-gate) may be stopped early.
 4. E3 + isoF/isoD + ladder.
 5. E5.
 6. Writing.
+
+## 11. Results log
+
+**2026-07-15 — infra:** cudnn attention was silently falling back to unfused
+XLA (auto dispatcher never tries cudnn with a mask); explicit
+`implementation="cudnn"` accepted the doc mask: 6.5× on the op, 2.75×
+end-to-end → base config 2.3M tok/s (§8 re-pinned). Corpus tokenized:
+68.33B tokens / 136.7GB, uploading to HF.
+
+**2026-07-15 — infra:** remat is mandatory at 20L/batch 64/seq 2048 (~70GiB
+peak without, even with fused attention) — removing it OOM'd the first
+extension cell; re-enabled permanently. Throughput numbers already included it.
+
+**2026-07-15 — E0 complete (12 cells, val/loss @5k):**
+
+| Arm | 0.5× | 1× | 2× | Verdict |
+|---|---|---|---|---|
+| SAN muon | pending readout | **2.245** | 2.251 | 0.02 interior — lock pending mlr0.01 final |
+| FFN muon | pending readout | 2.224 | **2.216** | top boundary → extension mlr0.08 |
+| SAN adamw | 2.361 | 2.293 | **2.267** | monotone ↑LR, top boundary → extension 1.2e-3 |
+| FFN adamw | 2.305 | 2.254 | **2.230** | monotone ↑LR, top boundary → extension 1.2e-3 |
+
+- Default LRs were centered too low for adamw arms; sweep working as intended.
+- Preliminary P6-direction note (unseeded, 5B tokens — not evidence): muon−adamw
+  gap larger for SAN (0.022) than FFN (0.014).
+- Best-FFN leads best-SAN by ~0.03 nats at 5B — expected at data-limited scale;
+  E2@30B is the first real comparison.
+- Ladder ran early by accident: san_tiny complete (valid), san_small died at
+  13.5k (HF streaming reset — memmap corpus eliminates this class), san_large
+  killed. FFN ladder cells deliberately held until E0 LRs lock.

@@ -233,7 +233,7 @@ class Stack(nn.Module):
         x = x.astype(dt)
 
         ScanBlock = nn.scan(
-            _ScanBody,
+            nn.remat(_ScanBody),
             variable_axes={"params": 0},
             split_rngs={"params": True},
             length=cfg.num_layers,
