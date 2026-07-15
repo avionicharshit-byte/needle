@@ -113,13 +113,13 @@ class MultiHeadAttention(nn.Module):
             k = apply_rope(k, cos, sin)
 
         if self.flash:
-            # (B, T, N, H) layout; GQA handled natively (no k/v repeat) and no
-            # (B, H, T, T) score materialization on backends with fused kernels.
+            impl = "cudnn" if jax.default_backend() == "gpu" else None
             out = jax.nn.dot_product_attention(
                 q.transpose(0, 2, 1, 3),
                 k.transpose(0, 2, 1, 3),
                 v.transpose(0, 2, 1, 3),
                 mask=mask,
+                implementation=impl,
             )
             out = out.reshape(B, -1, self.d_model)
         else:

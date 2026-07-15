@@ -277,17 +277,22 @@ def _process_parquet_file(path, spec, tokenizer, bin_f, off_f, base_offset):
     """Tokenize one parquet shard, append to the corpus files.
 
     Returns (docs_appended, tokens_appended). Deterministic given the shard,
-    formatter, and tokenizer.
+    formatter, and tokenizer. Reads the parquet in bounded batches — never
+    materializes a whole shard in memory (OOM-safe on small CPU pods).
     """
     import pyarrow.parquet as pq
 
-    table = pq.read_table(path, columns=spec.fields)
-    texts = (spec.fmt(row) for row in table.to_pylist())
-    texts = (t for t in texts if t)
+    def texts():
+        with pq.ParquetFile(path) as pf:
+            for batch in pf.iter_batches(batch_size=2048, columns=spec.fields):
+                for row in batch.to_pylist():
+                    t = spec.fmt(row)
+                    if t:
+                        yield t
 
     docs = tokens = 0
     offset = base_offset
-    for ids in _encode_stream(tokenizer, texts):
+    for ids in _encode_stream(tokenizer, texts()):
         arr = np.asarray(ids, dtype=np.uint16)
         bin_f.write(arr.tobytes())
         offset += len(ids)
@@ -334,7 +339,6 @@ def tokenize_corpus(dataset="synth", text_field=None, out_dir=None, force=False,
             if os.path.exists(p):
                 os.remove(p)
 
-    # crash safety: truncate any torn tail beyond the last committed manifest
     for p, unit, count in ((bin_path, 2, manifest["tokens"]), (off_path, 8, manifest["docs"])):
         open(p, "ab").close()
         if os.path.getsize(p) != count * unit:
@@ -344,9 +348,6 @@ def tokenize_corpus(dataset="synth", text_field=None, out_dir=None, force=False,
     dl_dir = os.path.join(out_dir, "_dl")
     todo = [f for f in files if f not in manifest["done_files"]]
 
-    # Pre-flight: fail before hours of work, not at the disk quota mid-run.
-    # Estimate remaining need from completed shards (or ~2 bytes/token × 70B
-    # for a fresh SYNTH run), + 1GB working space for the shard download.
     done_n = len(manifest["done_files"])
     per_shard = manifest["tokens"] * 2 / max(done_n, 1) if done_n else 280e6
     need = per_shard * len(todo) + 1e9
@@ -362,9 +363,23 @@ def tokenize_corpus(dataset="synth", text_field=None, out_dir=None, force=False,
     session_start_tokens = manifest["tokens"]  # rate must exclude resumed work
     with open(bin_path, "ab") as bin_f, open(off_path, "ab") as off_f:
         for i, fname in enumerate(todo):
-            local = hf_hub_download(spec.repo, fname, repo_type="dataset", local_dir=dl_dir)
-            docs, tokens = _process_parquet_file(local, spec, tokenizer, bin_f, off_f,
-                                                 manifest["tokens"])
+            bin_pos, off_pos = bin_f.tell(), off_f.tell()
+            for attempt in range(4):
+                try:
+                    local = hf_hub_download(spec.repo, fname, repo_type="dataset",
+                                            local_dir=dl_dir)
+                    docs, tokens = _process_parquet_file(local, spec, tokenizer,
+                                                         bin_f, off_f, manifest["tokens"])
+                    break
+                except Exception as e:
+                    bin_f.flush(); off_f.flush()
+                    bin_f.truncate(bin_pos); off_f.truncate(off_pos)
+                    if attempt == 3:
+                        raise
+                    wait = 15 * (attempt + 1)
+                    print(f"[corpus] shard {fname} failed ({type(e).__name__}: {e}) — "
+                          f"retry {attempt + 1}/3 in {wait}s", flush=True)
+                    _time.sleep(wait)
             bin_f.flush(); os.fsync(bin_f.fileno())
             off_f.flush(); os.fsync(off_f.fileno())
             manifest["docs"] += docs

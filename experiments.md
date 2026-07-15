@@ -51,6 +51,12 @@ Scaling ladder (FFN partner = same d, L/5 — FFN blocks are 5× attn blocks):
 | large | 26L d640 | 42.46M | 31.97M | 5L d640 (−4%) |
 | xl | 32L d768 | 69.24M | 56.65M | 6L d768 (−6%) |
 
+Ladder LR convention: all sizes reuse E0's base-tuned LRs (identical LR
+within each pair → the gap is internally fair; Muon transfers LR across
+width well). Before interpreting curve shape: 2-point LR probe at tiny and
+xl (~2.5B each) to confirm base LR is in the flat region; per-size sweeps
+only if it isn't.
+
 ```bash
 # ladder, 30B each; base cells reused from E2
 for cfg in "tiny 10 256 4 2" "small 14 384 6 3" "large 26 640 10 5" "xl 32 768 12 6"; do
