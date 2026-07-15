@@ -177,3 +177,21 @@ def test_split_reassemble_roundtrip(tmp_path):
         with open(out, "ab") as dst, open(part, "rb") as sf:
             shutil.copyfileobj(sf, dst)
     assert out.read_bytes() == data
+
+
+def test_file_slice_passes_hf_validation(tmp_path):
+    """huggingface_hub type-gates path_or_fileobj on io.BufferedIOBase and
+    probes size via seek/tell + hashes via streaming read — reproduce the
+    exact call that failed in production, without network."""
+    import io
+    from huggingface_hub import CommitOperationAdd
+    from src.data import _FileSlice
+
+    p = tmp_path / "tokens.bin"
+    p.write_bytes(bytes(range(256)) * 100)
+
+    with _FileSlice(str(p), 512, 1024) as fs:
+        assert isinstance(fs, io.BufferedIOBase)
+        op = CommitOperationAdd(path_in_repo="corpus/x/tokens.bin.part0000",
+                                path_or_fileobj=fs)
+        assert op.upload_info.size == 1024

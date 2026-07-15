@@ -10,6 +10,7 @@ Rows have length seq_len + 1; the train step derives inputs = tokens[:, :-1]
 and targets = tokens[:, 1:].
 """
 
+import io
 import json
 import os
 import queue
@@ -480,9 +481,12 @@ CORPUS_HF_PREFIX = "corpus"
 CORPUS_PART_BYTES = 10 * 1024**3  # 10 GB parts
 
 
-class _FileSlice:
+class _FileSlice(io.BufferedIOBase):
     """Seekable read-only view of a byte range of a file — lets us upload
-    part N of tokens.bin without writing a 10GB copy or buffering it in RAM."""
+    part N of tokens.bin without writing a 10GB copy or buffering it in RAM.
+
+    Inherits io.BufferedIOBase because huggingface_hub validates
+    path_or_fileobj with isinstance(..., io.BufferedIOBase)."""
 
     def __init__(self, path, start, length):
         self._f = open(path, "rb")
@@ -517,6 +521,7 @@ class _FileSlice:
 
     def close(self):
         self._f.close()
+        super().close()
 
     def __enter__(self):
         return self
