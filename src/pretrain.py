@@ -99,18 +99,23 @@ def _run_val(p_val_step, state, val_tokens, val_segs, num_devices):
 
 
 def _gate_metrics(params):
-    """Per-layer sigmoid(gate) values — a host-side param read, essentially free."""
+    """Per-layer residual-scale values — a host-side param read, essentially free.
+
+    gated -> sigmoid(gate); rezero -> raw alpha (can be negative);
+    standard/none -> no params, empty metrics.
+    """
     block = params["stack"]["layers"]["block"]
     metrics = {}
-    attn = np.asarray(jax.nn.sigmoid(block["attn_gate"].astype(jnp.float32)))
-    for i, g in enumerate(attn):
-        metrics[f"gates/attn_layer_{i}"] = float(g)
-    metrics["gates/attn_mean"] = float(attn.mean())
-    if "ffn_gate" in block:
-        ffn = np.asarray(jax.nn.sigmoid(block["ffn_gate"].astype(jnp.float32)))
-        for i, g in enumerate(ffn):
-            metrics[f"gates/ffn_layer_{i}"] = float(g)
-        metrics["gates/ffn_mean"] = float(ffn.mean())
+    for kind in ("attn", "ffn"):
+        if f"{kind}_gate" in block:
+            vals = np.asarray(jax.nn.sigmoid(block[f"{kind}_gate"].astype(jnp.float32)))
+        elif f"{kind}_alpha" in block:
+            vals = np.asarray(block[f"{kind}_alpha"].astype(jnp.float32))
+        else:
+            continue
+        for i, g in enumerate(vals):
+            metrics[f"gates/{kind}_layer_{i}"] = float(g)
+        metrics[f"gates/{kind}_mean"] = float(vals.mean())
     return metrics
 
 
@@ -192,6 +197,10 @@ def pretrain(args):
             dtype=args.dtype,
             activation=args.activation,
             no_feedforward=not args.ffn,
+            residual=getattr(args, "residual", "gated"),
+            norm=getattr(args, "norm", "zcrms"),
+            qk_norm=not getattr(args, "no_qk_norm", False),
+            post_attn_norm=getattr(args, "post_attn_norm", False),
         )
 
     assert config.vocab_size == tokenizer.vocab_size, (

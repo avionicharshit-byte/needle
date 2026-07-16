@@ -53,9 +53,15 @@ Scaling ladder (FFN partner = same d, L/5 — FFN blocks are 5× attn blocks):
 
 Ladder LR convention: all sizes reuse E0's base-tuned LRs (identical LR
 within each pair → the gap is internally fair; Muon transfers LR across
-width well). Before interpreting curve shape: 2-point LR probe at tiny and
-xl (~2.5B each) to confirm base LR is in the flat region; per-size sweeps
-only if it isn't.
+width well). Before interpreting curve shape: 3-point LR probe (0.5×/1×/2×)
+at tiny and xl (2.5k-step horizon, ~2.6B each — a 30k-horizon run's step-2500
+val is not comparable) to confirm base LR is in the flat region; per-size
+sweeps only if it isn't.
+
+As-run: 7×H100 frame-matched (batch 73 = 511 rows, LR flags as E3), probes
+√7-corrected; base pair rerun on-node (`ladder_{san,ffnisop}_base_31B_s42`)
+so the curve is internally consistent — E2's 512-row cells are not mixed
+into the ladder figure.
 
 ```bash
 # ladder, 30B each; base cells reused from E2
@@ -82,34 +88,29 @@ runtime from the config; muon runs keep adam side at 3e-4 as swept) —
 commands need no LR flags; explicit flags override. isoF/isoD inherit the
 isoP locks (stated convention).
 
-### E0 — LR fairness sweep (as run: 16 × 5B = 80B)
-Dominant LR per arm, 3 points; boundary rule: a winner on a sweep edge gets
-one extension per round until the curve turns. Winners carry into all
-commands below. E0 ran on the HF streaming path (pre-corpus) — reproduce
-without `--data-dir`.
+### E0 — LR fairness sweep (CLOSED 2026-07-15; 17 × 5B = 85B)
+3-point sweep per arm at 0.5×/1×/2× (muon 1× = 0.02, adamw 1× = 3e-4);
+boundary rule: sweep-edge winner gets one extension per round until the
+curve turns. Ran pre-corpus on the HF streaming path; runs
+`e0_{arm}_{opt}_(m)lr<value>`, 5k steps, explicit LR flags.
 
-```bash
-for mlr in 0.01 0.02 0.04; do
-  san pretrain --optimizer muon --muon-lr $mlr --max-steps 5000 \
-      --wandb --name e0_san_muon_mlr$mlr
-  san pretrain --ffn --num-layers 4 --optimizer muon --muon-lr $mlr --max-steps 5000 \
-      --wandb --name e0_ffnisop_muon_mlr$mlr
-done
-for lr in 1.5e-4 3e-4 6e-4; do
-  san pretrain --optimizer adamw --lr $lr --max-steps 5000 \
-      --wandb --name e0_san_adamw_lr$lr
-  san pretrain --ffn --num-layers 4 --optimizer adamw --lr $lr --max-steps 5000 \
-      --wandb --name e0_ffnisop_adamw_lr$lr
-done
-san pretrain --ffn --num-layers 4 --optimizer muon --muon-lr 0.08 --max-steps 5000 \
-    --wandb --name e0_ffnisop_muon_mlr0.08
-san pretrain --optimizer adamw --lr 1.2e-3 --max-steps 5000 \
-    --wandb --name e0_san_adamw_lr1.2e-3
-san pretrain --ffn --num-layers 4 --optimizer adamw --lr 1.2e-3 --max-steps 5000 \
-    --wandb --name e0_ffnisop_adamw_lr1.2e-3
-san pretrain --ffn --num-layers 4 --optimizer adamw --lr 2.4e-3 --max-steps 5000 \
-    --wandb --name e0_ffnisop_adamw_lr2.4e-3
-```
+Val/loss @5k:
+
+| Arm | 0.5× | 1× | 2× | 4× | 8× | 16× | Lock |
+|---|---|---|---|---|---|---|---|
+| SAN muon | 2.248 | **2.245** | 2.251 | | | | **0.02** |
+| FFN muon | 2.223 | 2.224 | **2.216** | 2.237 | | | **0.04** |
+| SAN adamw | 2.361 | 2.293 | **2.267** | 2.321 | | | **6e-4** |
+| FFN adamw | 2.305 | 2.254 | 2.230 | 2.219 | **2.199** | 2.216 | **2.4e-3** |
+
+- All four locks interior (loss turns on both sides); they are now the CLI
+  defaults (see preamble). SAN-muon landscape flat: 2.245–2.251 across 4×.
+- P6 signal at 5B — full crossover: SAN prefers muon (2.245 vs 2.267,
+  Δ0.022); FFN prefers adamw (2.199 vs 2.216, Δ0.017).
+- FFN @4.8e-3 (16×): ALL FFN gates collapsed (0.02–0.18, mean 0.07) while
+  attn gates stayed structured — under LR stress the standard transformer
+  self-pruned toward attention-only and still hit 2.216. H1-flavored, from
+  an undesigned direction (caveat: gated off ≠ removed).
 
 ### E1 — Headline (8 × 105B = 840B)
 Four matchings at seed 42 + 2 extra seeds for {SAN, FFN-isoP}. Primary
@@ -128,20 +129,45 @@ san pretrain --ffn --num-layers 20 --max-steps 100000 --seed 42 --log-rank-every
     --wandb --name ffnisod_muon_base_105B_s42
 ```
 
-### E2 — Optimizer×architecture 2×2 (4 × 30B = 120B; runs FIRST, gates E1)
-Fresh cells (E1's different WSD horizon makes its 30B mark incomparable).
-Prediction P6: adamw hurts SAN more. Muon cells reused by E5 + ladder.
+### E2 — Optimizer×architecture 2×2 (CLOSED 2026-07-16; 4 × 31.5B = 126B)
+Fresh cells at locked LRs (E1's different WSD horizon makes its 30B mark
+incomparable). Runs `{arch}_{opt}_base_31B_s42`, 30k steps, memmap corpus,
+8×H100. Muon cells reused by E5 + ladder.
 
-```bash
-for opt in muon adamw; do
-  san pretrain --optimizer $opt --max-steps 30000 --log-rank-every 2500 \
-      --wandb --name san_${opt}_base_31B_s42
-  san pretrain --ffn --num-layers 4 --optimizer $opt --max-steps 30000 --log-rank-every 2500 \
-      --wandb --name ffnisop_${opt}_base_31B_s42
-done
-```
+| Cell | val@30k | ppl | tok/s | wall |
+|---|---|---|---|---|
+| SAN muon | 2.1126 | 8.27 | 2.0M | 4h31m |
+| FFN-isoP muon | **2.0933** | 8.11 | 4.4M | 2h08m |
+| SAN adamw | 2.1103 | 8.25 | 2.0M | 4h28m |
+| FFN-isoP adamw | 2.0950 | 8.13 | 4.4M | 2h06m |
 
-### E3 — Component ablations (15 × 20B = 300B, SAN arm + FFN gate-mirror)
+- **GATE PASSED — E1 GO.** Best-SAN − best-FFN = 0.017 nats (0.8%) at 30B,
+  narrowed from 0.046 at 5B (E0). Muon pair: 0.019.
+- P6 at 30B: the 5B crossover washed out — within-arch optimizer deltas
+  ≤0.002 nats (SAN: adamw −0.002; FFN: muon −0.002), noise-scale, both
+  directions flipped vs E0. Interaction is a short-horizon phenomenon here.
+- Gate dynamics (wandb): optimizer dominates gate fate at tuned LR. Muon
+  suppresses — FFN cell ffn gates end 0.06/0.09/0.16/0.39 (mean 0.17,
+  echoing the E0 4.8e-3 collapse at the *locked* LR), attn L0 0.03;
+  SAN-muon early layers drift to 0.17–0.33, layers 14–17 rise to 0.65–0.81.
+  AdamW saturates — FFN cell ffn L1–3 → 1.0, attn L2–3 → 1.0; SAN-adamw
+  layers 10–17 end 0.82–0.99.
+- SAN-adamw early instability: val 3.53@500 → 3.78@1000 before recovering;
+  muon cells monotone.
+- Infra: three transient HF 504s — ffnisop_muon 75% milestone (22500) and
+  final upload failed (re-uploaded from pod), san_adamw step0 milestone
+  failed; benign core dump at san_adamw teardown after successful upload.
+
+### E3 — Component ablations (16 × 21B = 336B, SAN arm + FFN gate-mirror)
+Includes the gated 20k baseline `e3_san_gated_21B_s42` — E2's SAN cell is a
+30k-WSD run, incomparable at the 20k horizon. Depth cells d800/d400 use
+10H/5KV: cuDNN flash needs head_dim % 8 = 0 (100/50 rejected); KV ratio 2
+keeps attention params unchanged. Non-8-GPU nodes: frame-match batch
+(512/n per device) + explicit LRs canceling device scaling. As-run:
+7×H100, `--batch-size 73` (511 rows), `--lr 3.4286e-4`, `--muon-lr
+0.021381` SAN / `0.042762` FFN (effective = the 8-device locks). Blackwell
+(2026-07-16, returned): cuDNN doc-mask engine has no fast path — 5.25ms vs
+1.07ms is_causal at B171 ⇒ ~1.15× H100/GPU on this workload; avoid.
 | Axis | Variants | Needs code |
 |---|---|---|
 | Residual | gated · ReZero · standard · none | flag |
@@ -152,8 +178,13 @@ done
 Seeding rule: cells with |Δ| within ~2× the E1 seed-noise band get 3 seeds
 before interpretation.
 
+Note: with WD on kernels only (fixed frame), `--norm rms` is
+optimizer-equivalent to zcrms (γ = 1+γ_zc, shift-invariant Adam) — the cell
+is a Δ≈0 noise control, not a real ablation, unless WD is extended to norm
+scales (which would break the fixed frame).
+
 ```bash
-# variant flags (--residual/--norm/--qk-norm/--post-attn-norm) land with §6 infra
+san pretrain --max-steps 20000 --log-rank-every 2500 --wandb --name e3_san_gated_21B_s42
 for r in rezero standard none; do
   san pretrain --residual $r --max-steps 20000 --log-rank-every 2500 \
       --wandb --name e3_san_res-${r}_21B_s42
@@ -162,12 +193,13 @@ san pretrain --norm rms       --max-steps 20000 --wandb --name e3_san_rmsnorm_21
 san pretrain --no-qk-norm     --max-steps 20000 --wandb --name e3_san_noqknorm_21B_s42
 san pretrain --post-attn-norm --max-steps 20000 --wandb --name e3_san_sandwich_21B_s42
 
-for cfg in "8 800" "32 400" "48 320"; do
+for cfg in "8 800 10 5" "32 400 10 5" "48 320 8 4"; do
   set -- $cfg
-  san pretrain --num-layers $1 --d-model $2 --max-steps 20000 --log-rank-every 2500 \
-      --wandb --name e3_san_depth${1}_21B_s42
-  san pretrain --num-layers $1 --d-model $2 --residual standard --max-steps 20000 \
-      --log-rank-every 2500 --wandb --name e3_san_depth${1}_nogate_21B_s42
+  san pretrain --num-layers $1 --d-model $2 --num-heads $3 --num-kv-heads $4 \
+      --max-steps 20000 --log-rank-every 2500 --wandb --name e3_san_depth${1}_21B_s42
+  san pretrain --num-layers $1 --d-model $2 --num-heads $3 --num-kv-heads $4 \
+      --residual standard --max-steps 20000 --log-rank-every 2500 \
+      --wandb --name e3_san_depth${1}_nogate_21B_s42
 done
 san pretrain --residual standard --max-steps 20000 --log-rank-every 2500 \
     --wandb --name e3_san_depth20_nogate_21B_s42
@@ -237,7 +269,7 @@ python scripts/sv_spectra.py checkpoints/san_muon_base_105B_s42_step*.pkl \
 
 | Need | Size |
 |---|---|
-| Residual/norm variant flags (ReZero, standard, RMSNorm, no-QK, sandwich) | small, architecture.py |
+| ~~Residual/norm variant flags~~ DONE 2026-07-16 (`--residual {gated,rezero,standard,none}`, `--norm {zcrms,rms}`, `--no-qk-norm`, `--post-attn-norm`) | architecture.py |
 | Per-exercise val sets + per-region loss slicing | small, data.py + eval.py |
 | lm-eval loglikelihood adapter (stub in eval.py) | ~2 days |
 | SV-spectra script | small |
@@ -264,27 +296,14 @@ Run naming: `{arch}_{opt}_{size}_{tokens}_{seed}`, e.g. `san_muon_base_105B_s42`
 
 ## 9. Priority order
 
-1. E0 (read tok_s → re-pin §8).
-2. E2 → gate decision.
-3. E1 headline pair + E4/E6/E7 evals.
-4. E3 + isoF/isoD + ladder.
-5. E5.
-6. Writing.
+1. E1 headline pair + E4/E6/E7 evals.
+2. E3 + isoF/isoD + ladder.
+3. E5.
 
 ## 10. Results log
 
-
-**2026-07-15 — E0 complete incl. extensions (15 cells, val/loss @5k):**
-
-| Arm | 0.5× | 1× | 2× | 4× ext | 8× ext | Verdict |
-|---|---|---|---|---|---|---|
-| SAN muon | 2.248 | **2.245** | 2.251 | — | — | **LOCKED 0.02** (interior; landscape flat 2.245–2.251 across 4×) |
-| FFN muon | 2.223 | 2.224 | **2.216** | 2.237 (turned) | — | **LOCKED 0.04** (interior after extension; 0.5×/1× inversion ~0.001 = noise) |
-| SAN adamw | 2.361 | 2.293 | **2.267** | 2.321 (turned) | — | **LOCKED 6e-4** (interior after extension) |
-| FFN adamw | 2.305 | 2.254 | 2.230 | 2.219 | **2.199** | **LOCKED 2.4e-3** (16× ext 4.8e-3 = 2.216, turned + mid-run val bounce) |
-
-- E0 CLOSED. Locks: SAN muon 0.02 · FFN muon 0.04 · SAN adamw 6e-4 · FFN adamw 2.4e-3.
-- Striking accident @4.8e-3: ALL FFN gates collapsed (0.02–0.18, mean 0.07)
-  while attn gates stayed structured — under LR stress the standard
-  transformer self-pruned into attention-only form and still hit 2.216.
-  H1-flavored, from an undesigned direction (caveat: gated off ≠ removed).
+- **2026-07-15 — E0 CLOSED.** Locks: SAN muon 0.02 · FFN muon 0.04 ·
+  SAN adamw 6e-4 · FFN adamw 2.4e-3. Full table + findings: §4 E0.
+- **2026-07-16 — E2 CLOSED, GATE PASSED.** SAN within 0.017 nats of
+  FFN-isoP at 30B (was 0.046 at 5B); P6 crossover gone at 30B → E1 GO.
+  Full table + findings: §4 E2.

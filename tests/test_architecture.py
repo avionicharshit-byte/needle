@@ -152,6 +152,88 @@ def test_train_state_step(optimizer, no_ffn):
     assert any(jax.tree.leaves(moved))
 
 
+def test_rezero_is_identity_at_init():
+    """alpha init 0 -> every block is the identity -> logits reduce to
+    final_norm(embed) @ embed.T, computable by hand."""
+    import math
+    cfg = tiny_config(residual="rezero", dtype="float32")
+    model, params, tokens = init_model(cfg)
+    block = params["stack"]["layers"]["block"]
+    assert block["attn_alpha"].shape == (cfg.num_layers,)
+    assert "attn_gate" not in block
+
+    logits = model.apply({"params": params}, tokens)
+    emb = np.asarray(params["embedding"]["embedding"])
+    x = emb[np.asarray(tokens)] * math.sqrt(cfg.d_model)
+    rms = np.sqrt((x ** 2).mean(-1, keepdims=True) + 1e-6)
+    expected = (x / rms) @ emb.T
+    np.testing.assert_allclose(np.asarray(logits), expected, rtol=1e-4, atol=1e-4)
+
+
+@pytest.mark.parametrize("mode", ["standard", "none"])
+def test_unscaled_residual_variants(mode):
+    cfg = tiny_config(residual=mode, no_feedforward=False, dtype="float32")
+    model, params, tokens = init_model(cfg)
+    block = params["stack"]["layers"]["block"]
+    for name in ("attn_gate", "attn_alpha", "ffn_gate", "ffn_alpha"):
+        assert name not in block
+    logits = model.apply({"params": params}, tokens)
+    assert bool(jnp.isfinite(logits).all())
+
+
+def test_rms_norm_matches_zcrms_at_init():
+    """γ=1 RMSNorm and γ=0 zero-centered RMSNorm are the same function at init
+    (and optimizer-equivalent under kernel-only weight decay)."""
+    model_z, params_z, tokens = init_model(tiny_config(dtype="float32"))
+    model_r, params_r, _ = init_model(tiny_config(dtype="float32", norm="rms"))
+    scale = params_r["stack"]["layers"]["block"]["RMSNorm_0"]["scale"]
+    assert np.allclose(np.asarray(scale), 1.0)
+    logits_z = model_z.apply({"params": params_z}, tokens)
+    logits_r = model_r.apply({"params": params_r}, tokens)
+    np.testing.assert_allclose(np.asarray(logits_z), np.asarray(logits_r), rtol=1e-6, atol=1e-6)
+
+
+def test_qk_norm_toggle():
+    _, params, tokens = init_model(tiny_config(qk_norm=False))
+    attn = params["stack"]["layers"]["block"]["self_attn"]
+    assert "q_norm" not in attn and "k_norm" not in attn
+    model, params, tokens = init_model(tiny_config(qk_norm=False))
+    logits = model.apply({"params": params}, tokens)
+    assert bool(jnp.isfinite(logits).all())
+
+
+def test_post_attn_norm_params():
+    cfg = tiny_config(post_attn_norm=True, no_feedforward=False)
+    model, params, tokens = init_model(cfg)
+    block = params["stack"]["layers"]["block"]
+    assert "post_attn_norm" in block and "post_ffn_norm" in block
+    logits = model.apply({"params": params}, tokens)
+    assert bool(jnp.isfinite(logits).all())
+
+
+def test_variant_train_step():
+    """Kitchen-sink E3 variant survives a muon step under scan+remat."""
+    cfg = tiny_config(residual="rezero", norm="rms", qk_norm=False, post_attn_norm=True)
+    state = create_train_state(
+        jax.random.PRNGKey(0), cfg, learning_rate=1e-3, muon_lr=0.01,
+        total_steps=100, warmup_steps=10, optimizer="muon",
+    )
+    tokens = jnp.ones((2, 16), dtype=jnp.int32)
+
+    def loss_fn(params):
+        logits = state.apply_fn({"params": params}, tokens)
+        import optax
+        return optax.softmax_cross_entropy_with_integer_labels(logits, tokens).mean()
+
+    new_state = state
+    for _ in range(2):
+        loss, grads = jax.value_and_grad(loss_fn)(new_state.params)
+        assert bool(jnp.isfinite(loss))
+        new_state = new_state.apply_gradients(grads=grads)
+    moved = jax.tree.map(lambda a, b: bool(jnp.any(a != b)), state.params, new_state.params)
+    assert any(jax.tree.leaves(moved))
+
+
 def test_flash_matches_naive():
     """Fused attention path must be numerically equivalent to the naive path."""
     params = init_model(tiny_config(dtype="float32", flash=False))[1]

@@ -144,6 +144,16 @@ def main():
     p.add_argument("--d-ff", type=int, default=None,
                    help="FFN width when --ffn (default: 4*d_model)")
     p.add_argument("--activation", type=str, default="swiglu", choices=["swiglu", "geglu", "drelu"])
+    p.add_argument("--residual", type=str, default="gated",
+                   choices=["gated", "rezero", "standard", "none"],
+                   help="Residual variant (E3): gated sigmoid (default), ReZero alpha, "
+                        "standard skip, or no skip")
+    p.add_argument("--norm", type=str, default="zcrms", choices=["zcrms", "rms"],
+                   help="Norm variant (E3): zero-centered RMSNorm (default) or standard RMSNorm")
+    p.add_argument("--no-qk-norm", action="store_true",
+                   help="Disable QK-norm (E3)")
+    p.add_argument("--post-attn-norm", action="store_true",
+                   help="Sandwich norm: extra norm on sublayer outputs before the gate (E3)")
     p.add_argument("--warmup-ratio", type=float, default=0.05)
     p.add_argument("--decay-ratio", type=float, default=0.15)
     p.add_argument("--wandb", action="store_true")

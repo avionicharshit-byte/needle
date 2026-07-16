@@ -30,6 +30,31 @@ class ZCRMSNorm(nn.Module):
         return ((1 + scale) * x / rms).astype(self.dtype)
 
 
+class RMSNorm(nn.Module):
+    """Standard RMSNorm: scale initialized to 1, applied as γ * x / RMS(x).
+
+    E3 norm-axis variant. With weight decay on kernels only (the fixed frame),
+    this is optimizer-equivalent to ZCRMSNorm (γ = 1 + γ_zc, and Adam updates
+    are shift-invariant) — expected Δ≈0, serves as a noise control.
+    """
+    epsilon: float = 1e-6
+    dtype: jnp.dtype = jnp.bfloat16
+
+    @nn.compact
+    def __call__(self, x):
+        scale = self.param("scale", jinit.ones, (x.shape[-1],))
+        rms = jnp.sqrt(jnp.mean(x.astype(jnp.float32) ** 2, axis=-1, keepdims=True) + self.epsilon)
+        return (scale * x / rms).astype(self.dtype)
+
+
+def make_norm(kind, dtype, name=None):
+    if kind == "zcrms":
+        return ZCRMSNorm(dtype=dtype, name=name)
+    if kind == "rms":
+        return RMSNorm(dtype=dtype, name=name)
+    raise ValueError(f"Unknown norm: {kind!r} (expected 'zcrms' or 'rms')")
+
+
 @dataclass
 class TransformerConfig:
     vocab_size: int = 16384
@@ -45,6 +70,10 @@ class TransformerConfig:
     activation: str = "swiglu"
     no_feedforward: bool = True
     flash: bool = True
+    residual: str = "gated"       # gated | rezero | standard | none (E3)
+    norm: str = "zcrms"           # zcrms | rms (E3)
+    qk_norm: bool = True          # E3: --no-qk-norm
+    post_attn_norm: bool = False  # E3: sandwich norm on sublayer outputs
 
     def __init__(self, **kwargs):
         valid = {f.name for f in self.__dataclass_fields__.values()}
@@ -84,6 +113,8 @@ class MultiHeadAttention(nn.Module):
     num_layers: int
     dtype: jnp.dtype = jnp.bfloat16
     flash: bool = True
+    norm: str = "zcrms"
+    qk_norm: bool = True
 
     @nn.compact
     def __call__(self, x, mask=None, rope=None):
@@ -99,8 +130,9 @@ class MultiHeadAttention(nn.Module):
         k = k.reshape(B, -1, self.num_kv_heads, head_dim).transpose(0, 2, 1, 3)
         v = v.reshape(B, -1, self.num_kv_heads, head_dim).transpose(0, 2, 1, 3)
 
-        q = ZCRMSNorm(dtype=self.dtype, name="q_norm")(q)
-        k = ZCRMSNorm(dtype=self.dtype, name="k_norm")(k)
+        if self.qk_norm:
+            q = make_norm(self.norm, self.dtype, name="q_norm")(q)
+            k = make_norm(self.norm, self.dtype, name="k_norm")(k)
 
         if rope is not None:
             cos, sin = rope
@@ -160,8 +192,14 @@ class FeedForward(nn.Module):
 class Block(nn.Module):
     """Pre-norm self-attention (+ optional pre-norm FFN) with gated residuals.
 
-    Gates are scalar sigmoid(g) with g init 0, so every sublayer starts at
-    half-strength residual and can learn to sharpen (g→∞) or self-prune (g→-∞).
+    Residual variants (E3): gated = sigmoid(g) scalar, g init 0, so every
+    sublayer starts at half-strength residual and can learn to sharpen (g→∞)
+    or self-prune (g→-∞); rezero = raw scalar α init 0 (identity at init);
+    standard = plain skip; none = no skip connection.
+
+    post_attn_norm applies the norm to the sublayer output BEFORE the learned
+    scale (sandwich) — RMS norms are scale-invariant, so the reverse order
+    would silently erase the gate.
     """
     num_heads: int
     num_kv_heads: int
@@ -172,23 +210,44 @@ class Block(nn.Module):
     activation: str = "swiglu"
     no_feedforward: bool = True
     flash: bool = True
+    residual: str = "gated"
+    norm: str = "zcrms"
+    qk_norm: bool = True
+    post_attn_norm: bool = False
+
+    def _residual_scale(self, prefix):
+        if self.residual == "gated":
+            return nn.sigmoid(self.param(f"{prefix}_gate", jinit.zeros, ())).astype(self.dtype)
+        if self.residual == "rezero":
+            return self.param(f"{prefix}_alpha", jinit.zeros, ()).astype(self.dtype)
+        if self.residual in ("standard", "none"):
+            return None
+        raise ValueError(f"Unknown residual: {self.residual!r}")
 
     @nn.compact
     def __call__(self, x, mask=None, rope=None):
-        attn_gate = nn.sigmoid(self.param("attn_gate", jinit.zeros, ())).astype(self.dtype)
-        residual = x
-        x = ZCRMSNorm(dtype=self.dtype)(x)
-        x = MultiHeadAttention(self.num_heads, self.num_kv_heads, self.d_model, self.num_layers, self.dtype, self.flash, name="self_attn")(
-            x, mask=mask, rope=rope
-        )
-        x = residual + attn_gate * x
+        attn_scale = self._residual_scale("attn")
+        skip = x
+        x = make_norm(self.norm, self.dtype)(x)
+        x = MultiHeadAttention(self.num_heads, self.num_kv_heads, self.d_model, self.num_layers,
+                               self.dtype, self.flash, norm=self.norm, qk_norm=self.qk_norm,
+                               name="self_attn")(x, mask=mask, rope=rope)
+        if self.post_attn_norm:
+            x = make_norm(self.norm, self.dtype, name="post_attn_norm")(x)
+        if attn_scale is not None:
+            x = attn_scale * x
+        x = x if self.residual == "none" else skip + x
 
         if not self.no_feedforward:
-            ffn_gate = nn.sigmoid(self.param("ffn_gate", jinit.zeros, ())).astype(self.dtype)
-            residual = x
-            x = ZCRMSNorm(dtype=self.dtype)(x)
+            ffn_scale = self._residual_scale("ffn")
+            skip = x
+            x = make_norm(self.norm, self.dtype)(x)
             x = FeedForward(self.d_model, self.d_ff, self.num_layers, self.dtype, self.activation)(x)
-            x = residual + ffn_gate * x
+            if self.post_attn_norm:
+                x = make_norm(self.norm, self.dtype, name="post_ffn_norm")(x)
+            if ffn_scale is not None:
+                x = ffn_scale * x
+            x = x if self.residual == "none" else skip + x
 
         return x
 
@@ -210,6 +269,10 @@ class _ScanBody(nn.Module):
     no_feedforward: bool = True
     flash: bool = True
     collect_hidden: bool = False
+    residual: str = "gated"
+    norm: str = "zcrms"
+    qk_norm: bool = True
+    post_attn_norm: bool = False
 
     @nn.compact
     def __call__(self, carry, _):
@@ -217,7 +280,9 @@ class _ScanBody(nn.Module):
         x = Block(
             self.num_heads, self.num_kv_heads, self.d_model, self.d_ff,
             self.num_layers, self.dtype, self.activation, self.no_feedforward,
-            self.flash, name="block",
+            self.flash, residual=self.residual, norm=self.norm,
+            qk_norm=self.qk_norm, post_attn_norm=self.post_attn_norm,
+            name="block",
         )(x, mask=mask, rope=rope)
         return (x, mask, rope), (x if self.collect_hidden else None)
 
@@ -241,10 +306,12 @@ class Stack(nn.Module):
         (x, _, _), hidden = ScanBlock(
             cfg.num_heads, cfg.num_kv_heads, cfg.d_model, cfg.d_ff,
             cfg.num_layers, dt, cfg.activation, cfg.no_feedforward,
-            cfg.flash, collect_hidden, name="layers",
+            cfg.flash, collect_hidden, residual=cfg.residual, norm=cfg.norm,
+            qk_norm=cfg.qk_norm, post_attn_norm=cfg.post_attn_norm,
+            name="layers",
         )((x, mask, rope), None)
 
-        x = ZCRMSNorm(dtype=dt, name="final_norm")(x)
+        x = make_norm(cfg.norm, dt, name="final_norm")(x)
         return x, hidden
 
 
