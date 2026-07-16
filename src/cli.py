@@ -219,6 +219,15 @@ def main():
     p.add_argument("--val-blocks", type=int, default=64,
                    help="Number of packed validation blocks (default: 64)")
     p.add_argument("--throughput-runs", type=int, default=10)
+    p.add_argument("--by-exercise", action="store_true",
+                   help="E4: slice val loss by document group (see --group-field)")
+    p.add_argument("--by-region", action="store_true",
+                   help="E4: slice val loss by token region (query/trace/answer)")
+    p.add_argument("--group-field", type=str, default="exercise",
+                   help="Metadata field for --by-exercise grouping (default: exercise; "
+                        "e.g. language)")
+    p.add_argument("--val-docs", type=int, default=20_000,
+                   help="Documents for the E4 decomposition (default: 20000)")
     p.add_argument("--tasks", type=str, nargs="*", default=None,
                    help="Reserved: downstream tasks (lm-eval-harness adapter, future)")
 

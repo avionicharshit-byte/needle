@@ -183,34 +183,6 @@ optimizer-equivalent to zcrms (γ = 1+γ_zc, shift-invariant Adam) — the cell
 is a Δ≈0 noise control, not a real ablation, unless WD is extended to norm
 scales (which would break the fixed frame).
 
-```bash
-san pretrain --max-steps 20000 --log-rank-every 2500 --wandb --name e3_san_gated_21B_s42
-for r in rezero standard none; do
-  san pretrain --residual $r --max-steps 20000 --log-rank-every 2500 \
-      --wandb --name e3_san_res-${r}_21B_s42
-done
-san pretrain --norm rms       --max-steps 20000 --wandb --name e3_san_rmsnorm_21B_s42
-san pretrain --no-qk-norm     --max-steps 20000 --wandb --name e3_san_noqknorm_21B_s42
-san pretrain --post-attn-norm --max-steps 20000 --wandb --name e3_san_sandwich_21B_s42
-
-for cfg in "8 800 10 5" "32 400 10 5" "48 320 8 4"; do
-  set -- $cfg
-  san pretrain --num-layers $1 --d-model $2 --num-heads $3 --num-kv-heads $4 \
-      --max-steps 20000 --log-rank-every 2500 --wandb --name e3_san_depth${1}_21B_s42
-  san pretrain --num-layers $1 --d-model $2 --num-heads $3 --num-kv-heads $4 \
-      --residual standard --max-steps 20000 --log-rank-every 2500 \
-      --wandb --name e3_san_depth${1}_nogate_21B_s42
-done
-san pretrain --residual standard --max-steps 20000 --log-rank-every 2500 \
-    --wandb --name e3_san_depth20_nogate_21B_s42
-
-# gate × architecture mirror (P4 interaction form)
-san pretrain --ffn --num-layers 20 --max-steps 20000 --log-rank-every 2500 \
-    --wandb --name e3_ffnisod_gated_21B_s42
-san pretrain --ffn --num-layers 20 --residual standard --max-steps 20000 \
-    --log-rank-every 2500 --wandb --name e3_ffnisod_nogate_21B_s42
-```
-
 ### E4 — Gap decomposition (H2; evals on E1/E2 checkpoints, no training)
 Per-exercise val sets × per-region (query/trace/answer) Δloss heatmap.
 
@@ -223,15 +195,6 @@ done
 ### E5 — Data scaling (6 new × 30B = 180B; full-data cells from E2)
 `--max-docs` ∈ {2M, 8M, 32M, full} ≈ {17×, 4×, 1×, 0.4×} repetition. P8:
 FFN gains more from repetition.
-
-```bash
-for docs in 2000000 8000000 32000000; do
-  san pretrain --max-docs $docs --max-steps 30000 \
-      --wandb --name e5_san_muon_${docs}docs_31B_s42
-  san pretrain --ffn --num-layers 4 --max-docs $docs --max-steps 30000 \
-      --wandb --name e5_ffnisop_muon_${docs}docs_31B_s42
-done
-```
 
 ### E6 — Downstream evals (E1 checkpoints; needs lm-eval adapter)
 0-shot loglikelihood: lambada, hellaswag, arc_easy, piqa, sciq, winogrande,
@@ -270,9 +233,9 @@ python scripts/sv_spectra.py checkpoints/san_muon_base_105B_s42_step*.pkl \
 | Need | Size |
 |---|---|
 | ~~Residual/norm variant flags~~ DONE 2026-07-16 (`--residual {gated,rezero,standard,none}`, `--norm {zcrms,rms}`, `--no-qk-norm`, `--post-attn-norm`) | architecture.py |
-| Per-exercise val sets + per-region loss slicing | small, data.py + eval.py |
-| lm-eval loglikelihood adapter (stub in eval.py) | ~2 days |
-| SV-spectra script | small |
+| ~~Per-exercise/per-region loss slicing~~ DONE 2026-07-17 (`san eval --by-exercise --by-region [--group-field language] [--val-docs N]`; whole-doc packing, labels from marker ids, validated on E2 ckpt) | eval.py |
+| ~~lm-eval loglikelihood adapter~~ DONE 2026-07-17 (`san eval --checkpoint X --tasks sciq …`; needs `pip install lm-eval` on the eval pod; validated: sciq acc 0.70 @limit 20 on E2 SAN ckpt) | lm_eval_adapter.py |
+| ~~SV-spectra script~~ DONE 2026-07-17 (`python scripts/sv_spectra.py <ckpts> --out spectra`; per-kernel SVs + effective/stable rank to npz) | scripts/sv_spectra.py |
 | Param/FLOP calculator script | trivial |
 
 Run naming: `{arch}_{opt}_{size}_{tokens}_{seed}`, e.g. `san_muon_base_105B_s42`.
@@ -296,9 +259,7 @@ Run naming: `{arch}_{opt}_{size}_{tokens}_{seed}`, e.g. `san_muon_base_105B_s42`
 
 ## 9. Priority order
 
-1. E1 headline pair + E4/E6/E7 evals.
-2. E3 + isoF/isoD + ladder.
-3. E5.
+1. E4/E6/E7 evals.
 
 ## 10. Results log
 

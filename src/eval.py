@@ -6,8 +6,12 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 
-from .tokenizer import get_tokenizer
-from .data import resolve_dataset, build_val_set
+from .tokenizer import (
+    get_tokenizer,
+    BOS_ID, EOS_ID,
+    IM_START_ID, IM_END_ID, THINK_START_ID, THINK_END_ID,
+)
+from .data import resolve_dataset, build_val_set, stream_examples, _encode_stream
 from .architecture import SimpleAttentionNetwork, make_causal_packing_mask
 from .run import load_checkpoint, generate
 
@@ -99,17 +103,207 @@ def sample_generations(model, params, tokenizer, prompts=None, max_new_tokens=12
     return {"generations": generations, "bigram_repetition_rate": rep_rate}
 
 
-def evaluate_downstream(model, params, tokenizer, tasks):
-    """Downstream benchmark stub (lm-eval-harness adapter, future work).
+# ---------------------------------------------------------------------------
+# E4 — gap decomposition: loss sliced by token region x document group (H2)
+# ---------------------------------------------------------------------------
 
-    Planned shape: a wrapper exposing loglikelihood(context, continuation)
-    implemented as one packed causal forward with the continuation positions
-    loss-masked in — the same primitives compute_val_loss uses. Tasks like
-    lambada/hellaswag/arc_easy then score via the standard harness.
+REGIONS = ("other", "query", "trace", "answer")
+
+
+def region_ids(ids):
+    """Per-token region labels for one ChatML-formatted doc (ids incl. BOS/EOS).
+
+    query(1) = user turn body; trace(2) = inside <think>; answer(3) =
+    assistant text outside the trace; other(0) = BOS/EOS and the markers.
+    Role-header tokens ("user\\n" / "assistant\\n") count toward their turn's
+    region — 1-2 boilerplate tokens per doc, identical across arms, so Δloss
+    comparisons are unaffected.
     """
-    if tasks:
-        raise NotImplementedError(f"Downstream tasks not implemented yet: {tasks}")
-    return {}
+    out = np.zeros(len(ids), dtype=np.int32)
+    turns, region = 0, 0
+    for i, t in enumerate(ids):
+        if t == IM_START_ID:
+            turns += 1
+            region = 1 if turns == 1 else 3
+        elif t == IM_END_ID:
+            region = 0
+        elif t == THINK_START_ID:
+            region = 2
+        elif t == THINK_END_ID:
+            region = 3
+        else:
+            out[i] = region
+    return out
+
+
+def _pack_labeled_docs(labeled_docs, batch_size, seq_len):
+    """Whole-doc packing: docs are never split across rows, so per-token label
+    planes stay aligned. Rows are zero-padded (seg 0 = masked everywhere).
+    Docs longer than seq_len+1 are skipped and counted.
+
+    labeled_docs: iterable of (ids, regions, group_idx).
+    Yields (tokens, segs, regions, groups) int32 arrays of shape (B, T+1);
+    groups is -1 on padding. Emits the final partial batch. Returns skip count
+    via the mutable `skipped` list trick is avoided — caller counts via the
+    generator's .skipped attribute set on the wrapper below.
+    """
+    row_len = seq_len + 1
+    rows = []
+    cur_t, cur_s, cur_r, cur_g = [], [], [], []
+    seg = 0
+
+    def flush_row():
+        nonlocal cur_t, cur_s, cur_r, cur_g, seg
+        pad = row_len - len(cur_t)
+        rows.append((
+            np.array(cur_t + [0] * pad, dtype=np.int32),
+            np.array(cur_s + [0] * pad, dtype=np.int32),
+            np.array(cur_r + [0] * pad, dtype=np.int32),
+            np.array(cur_g + [-1] * pad, dtype=np.int32),
+        ))
+        cur_t, cur_s, cur_r, cur_g = [], [], [], []
+        seg = 0
+
+    for ids, regions, group in labeled_docs:
+        if len(ids) > row_len:
+            continue  # caller pre-filters/counts; belt and braces
+        if len(cur_t) + len(ids) > row_len:
+            flush_row()
+        seg += 1
+        cur_t.extend(ids)
+        cur_s.extend([seg] * len(ids))
+        cur_r.extend(regions.tolist())
+        cur_g.extend([group] * len(ids))
+        if len(rows) == batch_size:
+            yield tuple(np.stack(x) for x in zip(*rows))
+            rows = []
+    if cur_t:
+        flush_row()
+    while rows:
+        chunk, rows = rows[:batch_size], rows[batch_size:]
+        yield tuple(np.stack(x) for x in zip(*chunk))
+
+
+_nll_matrix_fn_cache = {}
+
+
+def _get_nll_matrix_fn(model):
+    key = id(model)
+    if key not in _nll_matrix_fn_cache:
+        @jax.jit
+        def nll_matrix(params, tokens, segs):
+            inputs, targets = tokens[:, :-1], tokens[:, 1:]
+            seg_in, seg_tgt = segs[:, :-1], segs[:, 1:]
+            mask = make_causal_packing_mask(seg_in)
+            logits = model.apply({"params": params}, inputs, mask=mask)
+            nll = optax.softmax_cross_entropy_with_integer_labels(logits, targets)
+            valid = ((seg_in == seg_tgt) & (seg_in > 0)).astype(jnp.float32)
+            return nll * valid, valid
+        _nll_matrix_fn_cache[key] = nll_matrix
+    return _nll_matrix_fn_cache[key]
+
+
+def decompose_loss(model, params, labeled_docs, group_names, batch_size, seq_len):
+    """Loss sliced by (group x region) over an iterable of
+    (ids, regions, group_idx) docs. Returns {(group, region): (loss, tokens)}
+    including "all" marginals on both axes.
+    """
+    nll_matrix = _get_nll_matrix_fn(model)
+    n_groups, n_regions = len(group_names), len(REGIONS)
+    nll_sum = np.zeros((n_groups + 1, n_regions + 1))
+    tok_sum = np.zeros((n_groups + 1, n_regions + 1))
+
+    for tokens, segs, regions, groups in _pack_labeled_docs(labeled_docs, batch_size, seq_len):
+        nll, valid = nll_matrix(params, jnp.asarray(tokens), jnp.asarray(segs))
+        nll, valid = np.asarray(nll), np.asarray(valid)
+        # labels aligned to TARGET tokens (loss at position i predicts i+1)
+        reg_t, grp_t = regions[:, 1:], groups[:, 1:]
+        for g in range(n_groups):
+            for r in range(n_regions):
+                sel = (grp_t == g) & (reg_t == r) & (valid > 0)
+                nll_sum[g, r] += nll[sel].sum()
+                tok_sum[g, r] += sel.sum()
+    nll_sum[:-1, -1] = nll_sum[:-1, :-1].sum(axis=1)
+    tok_sum[:-1, -1] = tok_sum[:-1, :-1].sum(axis=1)
+    nll_sum[-1, :] = nll_sum[:-1, :].sum(axis=0)
+    tok_sum[-1, :] = tok_sum[:-1, :].sum(axis=0)
+
+    out = {}
+    for gi, g in enumerate(list(group_names) + ["all"]):
+        for ri, r in enumerate(list(REGIONS) + ["all"]):
+            if tok_sum[gi, ri] > 0:
+                out[(g, r)] = (nll_sum[gi, ri] / tok_sum[gi, ri], int(tok_sum[gi, ri]))
+    return out
+
+
+def labeled_val_docs(tokenizer, spec, num_docs, seq_len, group_field="exercise",
+                     oversample=10, seed=3407):
+    """Deterministic labeled eval docs: same unshuffled-head 1-in-`oversample`
+    sampling as build_val_set (seed 3407), but keeping metadata. Returns
+    (docs, group_names, n_skipped) where docs = [(ids, regions, group_idx)]
+    and skipped counts docs longer than seq_len+1.
+    """
+    import random
+    rng = random.Random(seed)
+
+    def sampled():
+        for text, ex in stream_examples(spec, shuffle=False):
+            if rng.random() < 1.0 / oversample:
+                yield text, str(ex.get(group_field, "?") or "?")
+
+    group_names, group_idx = [], {}
+    docs, skipped = [], 0
+    src = sampled()
+    texts_labels = []
+
+    def texts():
+        for text, label in src:
+            texts_labels.append(label)
+            yield text
+
+    for doc_ids in _encode_stream(tokenizer, texts()):
+        label = texts_labels[len(docs) + skipped]
+        ids = [BOS_ID] + doc_ids + [EOS_ID]
+        if len(ids) > seq_len + 1:
+            skipped += 1
+            continue
+        if label not in group_idx:
+            group_idx[label] = len(group_names)
+            group_names.append(label)
+        docs.append((np.array(ids, dtype=np.int32), region_ids(ids), group_idx[label]))
+        if len(docs) >= num_docs:
+            break
+    return docs, group_names, skipped
+
+
+def print_decomposition(matrix, group_names):
+    cols = list(REGIONS) + ["all"]
+    print(f"\n{'group':<24}" + "".join(f"{c:>12}" for c in cols) + f"{'tokens':>12}")
+    for g in list(group_names) + ["all"]:
+        cells = [matrix.get((g, c)) for c in cols]
+        row = "".join(f"{c[0]:>12.4f}" if c else f"{'-':>12}" for c in cells)
+        total = matrix.get((g, "all"))
+        print(f"{g:<24}{row}{total[1] if total else 0:>12,}")
+
+
+def evaluate_downstream(model, params, tokenizer, tasks, seq_len=2048, batch_size=16):
+    """E6: 0-shot loglikelihood tasks via lm-evaluation-harness."""
+    if not tasks:
+        return {}
+    try:
+        import lm_eval
+    except ImportError:
+        raise SystemExit("E6 downstream evals need the harness: pip install lm-eval")
+    from .lm_eval_adapter import make_harness_lm
+
+    lm = make_harness_lm(model, params, tokenizer, seq_len=seq_len, batch_size=batch_size)
+    results = lm_eval.simple_evaluate(model=lm, tasks=list(tasks))["results"]
+    print(f"\n{'task':<20}{'metric':<16}{'value':>10}")
+    for task, metrics in results.items():
+        for metric, value in metrics.items():
+            if isinstance(value, float):
+                print(f"{task:<20}{metric:<16}{value:>10.4f}")
+    return results
 
 
 def main(args):
@@ -122,6 +316,30 @@ def main(args):
 
     spec = resolve_dataset(args.dataset, getattr(args, "text_field", None))
     seq_len = min(args.seq_len, config.max_seq_len)
+
+    tasks = getattr(args, "tasks", None)
+    if tasks:
+        evaluate_downstream(model, params, tokenizer, tasks,
+                            seq_len=seq_len, batch_size=args.batch_size)
+        return
+
+    by_exercise = getattr(args, "by_exercise", False)
+    by_region = getattr(args, "by_region", False)
+    if by_exercise or by_region:
+        print(f"Gap decomposition over {args.val_docs} val docs "
+              f"(group field: {args.group_field})...")
+        docs, group_names, skipped = labeled_val_docs(
+            tokenizer, spec, args.val_docs, seq_len, group_field=args.group_field)
+        if not by_exercise:
+            docs = [(ids, regions, 0) for ids, regions, _ in docs]
+            group_names = ["all-docs"]
+        matrix = decompose_loss(model, params, docs, group_names,
+                                args.batch_size, seq_len)
+        if skipped:
+            print(f"({skipped} docs skipped: longer than seq_len+1)")
+        print_decomposition(matrix, group_names)
+        return
+
     print(f"Building {args.val_blocks} val blocks from {spec.repo} (seq_len={seq_len})...")
     val_tokens, val_segs, _ = build_val_set(tokenizer, spec, args.val_blocks, args.batch_size, seq_len)
 
@@ -137,5 +355,3 @@ def main(args):
     print(f"Bigram repetition{samples['bigram_repetition_rate']:>10.1%}\n")
     for prompt, text in samples["generations"]:
         print(f"  > {prompt!r}\n    {text!r}\n")
-
-    evaluate_downstream(model, params, tokenizer, getattr(args, "tasks", None))

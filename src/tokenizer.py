@@ -21,6 +21,8 @@ IM_END = "<|im_end|>"
 THINK_START = "<think>"
 THINK_END = "</think>"
 CHAT_MARKERS = [IM_START, IM_END, THINK_START, THINK_END]
+# user_defined_symbols land right after the 4 control ids, in list order
+IM_START_ID, IM_END_ID, THINK_START_ID, THINK_END_ID = 4, 5, 6, 7
 
 # Single HF repo for all branch artifacts: tokenizer/ and checkpoints/.
 HF_REPO = "Cactus-Compute/simple-attention-networks"

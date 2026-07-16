@@ -76,10 +76,11 @@ def resolve_dataset(name, text_field=None):
                        fields=[text_field or "text"])
 
 
-def stream_texts(spec, seed=42, shuffle=True, skip=0, take=None):
-    """Yield formatted document strings. skip/take apply BEFORE shuffle so a
-    val holdout taken from the unshuffled head is deterministic and disjoint
-    from a train stream that skips it."""
+def stream_examples(spec, seed=42, shuffle=True, skip=0, take=None):
+    """Yield (formatted_text, raw_example) pairs — the raw example carries
+    metadata (e.g. SYNTH's `exercise`) that the packed corpus does not.
+    skip/take apply BEFORE shuffle so a val holdout taken from the unshuffled
+    head is deterministic and disjoint from a train stream that skips it."""
     from datasets import load_dataset
 
     ds = load_dataset(spec.repo, spec.name, split=spec.split, streaming=True)
@@ -93,7 +94,13 @@ def stream_texts(spec, seed=42, shuffle=True, skip=0, take=None):
     for example in ds:
         text = spec.fmt(example)
         if text:
-            yield text
+            yield text, example
+
+
+def stream_texts(spec, seed=42, shuffle=True, skip=0, take=None):
+    """Yield formatted document strings (see stream_examples)."""
+    for text, _ in stream_examples(spec, seed=seed, shuffle=shuffle, skip=skip, take=take):
+        yield text
 
 
 def _encode_stream(tokenizer, texts, workers=8, ahead=256):
