@@ -63,20 +63,6 @@ As-run: 7×H100 frame-matched (batch 73 = 511 rows, LR flags as E3), probes
 so the curve is internally consistent — E2's 512-row cells are not mixed
 into the ladder figure.
 
-```bash
-# ladder, 30B each; base cells reused from E2
-for cfg in "tiny 10 256 4 2" "small 14 384 6 3" "large 26 640 10 5" "xl 32 768 12 6"; do
-  set -- $cfg
-  san pretrain --num-layers $2 --d-model $3 --num-heads $4 --num-kv-heads $5 \
-      --max-steps 30000 --wandb --name ladder_san_${1}_31B_s42
-done
-for cfg in "tiny 2 256 4 2" "small 3 384 6 3" "large 5 640 10 5" "xl 6 768 12 6"; do
-  set -- $cfg
-  san pretrain --ffn --num-layers $2 --d-model $3 --num-heads $4 --num-kv-heads $5 \
-      --max-steps 30000 --wandb --name ladder_ffnisop_${1}_31B_s42
-done
-```
-
 ## 4. Experiment matrix
 
 Steps ≈ tokens/1.05M (5B→5k, 20B→20k, 30B→30k, 105B→100k). Append to every
@@ -115,19 +101,6 @@ Val/loss @5k:
 ### E1 — Headline (8 × 105B = 840B)
 Four matchings at seed 42 + 2 extra seeds for {SAN, FFN-isoP}. Primary
 metric: val loss/PPL.
-
-```bash
-for seed in 42 43 44; do
-  san pretrain --max-steps 100000 --seed $seed --log-rank-every 2500 \
-      --wandb --name san_muon_base_105B_s$seed
-  san pretrain --ffn --num-layers 4 --max-steps 100000 --seed $seed --log-rank-every 2500 \
-      --wandb --name ffnisop_muon_base_105B_s$seed
-done
-san pretrain --ffn --num-layers 9  --max-steps 100000 --seed 42 --log-rank-every 2500 \
-    --wandb --name ffnisof_muon_base_105B_s42
-san pretrain --ffn --num-layers 20 --max-steps 100000 --seed 42 --log-rank-every 2500 \
-    --wandb --name ffnisod_muon_base_105B_s42
-```
 
 ### E2 — Optimizer×architecture 2×2 (CLOSED 2026-07-16; 4 × 31.5B = 126B)
 Fresh cells at locked LRs (E1's different WSD horizon makes its 30B mark
@@ -214,8 +187,8 @@ Rank + gate trajectories from wandb; SV spectra over milestone checkpoints
 {SAN+muon, SAN+adamw, SAN-no-gates, FFN-isoP}.
 
 ```bash
-python scripts/sv_spectra.py checkpoints/san_muon_base_105B_s42_step*.pkl \
-                             checkpoints/san_adamw_base_31B_s42_step*.pkl
+san spectra checkpoints/san_muon_base_105B_s42_step*.pkl \
+            checkpoints/san_adamw_base_31B_s42_step*.pkl
 ```
 
 ## 5. Figures
@@ -235,7 +208,7 @@ python scripts/sv_spectra.py checkpoints/san_muon_base_105B_s42_step*.pkl \
 | ~~Residual/norm variant flags~~ DONE 2026-07-16 (`--residual {gated,rezero,standard,none}`, `--norm {zcrms,rms}`, `--no-qk-norm`, `--post-attn-norm`) | architecture.py |
 | ~~Per-exercise/per-region loss slicing~~ DONE 2026-07-17 (`san eval --by-exercise --by-region [--group-field language] [--val-docs N]`; whole-doc packing, labels from marker ids, validated on E2 ckpt) | eval.py |
 | ~~lm-eval loglikelihood adapter~~ DONE 2026-07-17 (`san eval --checkpoint X --tasks sciq …`; needs `pip install lm-eval` on the eval pod; validated: sciq acc 0.70 @limit 20 on E2 SAN ckpt) | lm_eval_adapter.py |
-| ~~SV-spectra script~~ DONE 2026-07-17 (`python scripts/sv_spectra.py <ckpts> --out spectra`; per-kernel SVs + effective/stable rank to npz) | scripts/sv_spectra.py |
+| ~~SV-spectra script~~ DONE 2026-07-17 (`san spectra <ckpts> --out spectra`; per-kernel SVs + effective/stable rank to npz) | spectra.py |
 | Param/FLOP calculator script | trivial |
 
 Run naming: `{arch}_{opt}_{size}_{tokens}_{seed}`, e.g. `san_muon_base_105B_s42`.

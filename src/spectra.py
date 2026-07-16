@@ -1,7 +1,7 @@
 """Weight singular-value spectra from checkpoints (E7).
 
 Usage:
-    python scripts/sv_spectra.py checkpoints/san_muon_base_105B_s42*.pkl [--out spectra]
+    san spectra checkpoints/san_muon_base_105B_s42*.pkl [--out spectra]
 
 Per checkpoint, for every Dense kernel (scanned kernels have shape
 (L, din, dout)), computes the full SV spectrum per layer plus SV-entropy
@@ -11,9 +11,9 @@ effective rank and stable rank. Writes <out>/<ckpt_stem>.npz with keys
 "<param_path>/stable_rank" (L,)
 and prints a per-matrix summary. Milestone files (…_step<k>.pkl) give the
 0/25/50/75/100% trajectory; the money figure compares end-of-training
-per-layer ranks across arms.
+per-layer ranks across arms. Globs resolve against LOCAL files — bulk-fetch
+milestones first: hf download <repo> --include "checkpoints/<name>_step*".
 """
-import argparse
 import os
 import pickle
 import sys
@@ -46,11 +46,7 @@ def spectra(params):
     return out
 
 
-def main(argv=None):
-    ap = argparse.ArgumentParser()
-    ap.add_argument("checkpoints", nargs="+")
-    ap.add_argument("--out", default="spectra")
-    args = ap.parse_args(argv)
+def main(args):
     os.makedirs(args.out, exist_ok=True)
 
     for path in args.checkpoints:
@@ -70,7 +66,3 @@ def main(argv=None):
             e, s = d["eff_rank"], d["stable_rank"]
             print(f"  {name:<44}{e.mean():>9.1f} ±{e.std():>5.1f}{s.mean():>14.1f}")
     print(f"\nSpectra written to {args.out}/", file=sys.stderr)
-
-
-if __name__ == "__main__":
-    main()

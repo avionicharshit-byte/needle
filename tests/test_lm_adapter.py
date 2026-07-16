@@ -1,12 +1,10 @@
-import importlib.util
-import os
-
 import jax
 import jax.numpy as jnp
 import numpy as np
 
 from src.architecture import SimpleAttentionNetwork, TransformerConfig, make_causal_mask
 from src.lm_eval_adapter import LoglikelihoodScorer
+from src.spectra import spectra
 from src.tokenizer import BOS_ID
 
 
@@ -94,17 +92,12 @@ def test_batching_matches_single():
         assert np.isclose(a, b, rtol=1e-4) and ga == gb
 
 
-def test_sv_spectra_shapes(tmp_path):
-    spec = importlib.util.spec_from_file_location(
-        "sv_spectra", os.path.join(os.path.dirname(__file__), "..", "scripts", "sv_spectra.py"))
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-
+def test_sv_spectra_shapes():
     rng = np.random.default_rng(0)
     params = {"stack": {"block": {"q": {"kernel": rng.normal(size=(3, 16, 16))},
                                   "scale": np.ones(16)}},
               "emb": {"embedding": rng.normal(size=(64, 16))}}
-    out = mod.spectra(params)
+    out = spectra(params)
     assert list(out.keys()) == ["stack/block/q"]
     assert out["stack/block/q"]["sv"].shape == (3, 16)
     assert (out["stack/block/q"]["eff_rank"] <= 16).all()

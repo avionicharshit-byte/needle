@@ -201,6 +201,13 @@ def main():
     p.add_argument("--upload", action="store_true",
                    help="Upload trained tokenizer to HF hub (to share across machines)")
 
+    p = sub.add_parser("spectra", add_help=False)
+    p.add_argument("checkpoints", nargs="+",
+                   help="Checkpoint .pkl paths (milestone globs: <name>_step*.pkl; "
+                        "globs need local files — hf download the milestones first)")
+    p.add_argument("--out", type=str, default="spectra",
+                   help="Output dir for per-checkpoint .npz (default: spectra)")
+
     p = sub.add_parser("sample", add_help=False)
     p.add_argument("--checkpoint", type=str, required=True)
     p.add_argument("--prompt", type=str, default=None, help="Prompt text to continue")
@@ -258,6 +265,9 @@ def main():
             vocab_size=args.vocab_size, max_docs=args.max_docs,
             force=args.force, upload=args.upload,
         )
+    elif args.command == "spectra":
+        from .spectra import main as spectra_main
+        spectra_main(args)
     elif args.command == "sample":
         from .run import main as run_main
         run_main(args)

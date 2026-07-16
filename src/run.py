@@ -1,3 +1,4 @@
+import os
 import pickle
 import sys
 
@@ -13,7 +14,18 @@ _decode_fn_cache = {}
 
 
 def load_checkpoint(path):
-    """Load a format-v2 checkpoint. Returns (params, config)."""
+    """Load a format-v2 checkpoint. Returns (params, config).
+
+    Falls back to downloading checkpoints/<basename> from the HF repo when
+    the path does not exist locally — same convention as pretrain resume."""
+    if not os.path.exists(path):
+        from huggingface_hub import hf_hub_download
+        from .tokenizer import HF_REPO
+        print(f"{path} not found locally, downloading from HF...", flush=True)
+        local_dir = os.path.dirname(path) or "checkpoints"
+        os.makedirs(local_dir, exist_ok=True)
+        path = hf_hub_download(HF_REPO, f"checkpoints/{os.path.basename(path)}",
+                               repo_type="model", local_dir=local_dir)
     with open(path, "rb") as f:
         ckpt = pickle.load(f)
     version = ckpt.get("format_version") if isinstance(ckpt, dict) else None
