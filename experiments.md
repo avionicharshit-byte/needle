@@ -207,7 +207,7 @@ san spectra checkpoints/san_muon_base_105B_s42_step*.pkl \
 |---|---|
 | ~~Residual/norm variant flags~~ DONE 2026-07-16 (`--residual {gated,rezero,standard,none}`, `--norm {zcrms,rms}`, `--no-qk-norm`, `--post-attn-norm`) | architecture.py |
 | ~~Per-exercise/per-region loss slicing~~ DONE 2026-07-17 (`san eval --by-exercise --by-region [--group-field language] [--val-docs N]`; whole-doc packing, labels from marker ids, validated on E2 ckpt) | eval.py |
-| ~~lm-eval loglikelihood adapter~~ DONE 2026-07-17 (`san eval --checkpoint X --tasks sciq …`; needs `pip install lm-eval` on the eval pod; validated: sciq acc 0.70 @limit 20 on E2 SAN ckpt) | lm_eval_adapter.py |
+| ~~lm-eval loglikelihood adapter~~ DONE 2026-07-17 (`san eval --checkpoint X --tasks sciq …`; needs `pip install lm-eval` on the eval pod; validated: sciq acc 0.70 @limit 20 on E2 SAN ckpt) | eval.py |
 | ~~SV-spectra script~~ DONE 2026-07-17 (`san spectra <ckpts> --out spectra`; per-kernel SVs + effective/stable rank to npz) | spectra.py |
 | Param/FLOP calculator script | trivial |
 

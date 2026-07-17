@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from src.architecture import SimpleAttentionNetwork, TransformerConfig, make_causal_mask
-from src.lm_eval_adapter import LoglikelihoodScorer
+from src.eval import LoglikelihoodScorer
 from src.spectra import spectra
 from src.tokenizer import BOS_ID
 
