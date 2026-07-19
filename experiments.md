@@ -130,10 +130,15 @@ metric: val loss/PPL. Remaining: s44 pair (SAN @70k, FFN-isoP queued).
 |---|---|---|
 | SAN s42 | 24.13M | 2.0711 |
 | SAN s43 | 24.13M | 2.0646 |
+| SAN s44 | 24.13M | 2.0698 |
 | FFN-isoP s42 | 24.12M | 2.0656 |
 | FFN-isoP s43 | 24.12M | 2.1137 † |
+| FFN-isoP s44 | 24.12M | running |
 | FFN-isoF (9L) | ~43M | 1.8059 |
 | FFN-isoD (20L) | 87.06M | 1.5982 |
+
+SAN seeds: mean 2.0685, σ = 0.0028 — the arm is tight; the FFN arm's σ
+carries the s43 incident.
 
 † **Terminal instability**: s43 tracked s42 to within 0.002 through step
 99k (2.0757 vs 2.0741), then grad norm ramped 0.09→0.30 over the final
@@ -216,7 +221,7 @@ scales (which would break the fixed frame).
 | no residual | 2.8826 | +0.75 |
 | depth8 (d800) / nogate | 2.1680 / 2.1639 | +0.034 / +0.030 |
 | depth32 (d400) / nogate | 2.1528 / 2.1503 | +0.019 / +0.016 |
-| depth48 (d320) | 2.1751 | +0.041 |
+| depth48 (d320) / nogate | 2.1751 / 2.1765 | +0.041 / +0.042 |
 
 - **QK-norm is load-bearing**: removing it diverges outright at the locked
   muon LR (8.28 ≈ uniform). The strongest single-component finding.
