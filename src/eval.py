@@ -330,6 +330,15 @@ def print_decomposition(matrix, group_names):
         total = matrix.get((g, "all"))
         print(f"{g:<24}{row}{total[1] if total else 0:>12,}")
 
+    grand = matrix[("all", "all")][0] * matrix[("all", "all")][1]
+    print(f"\n{'loss share %':<24}" + "".join(f"{c:>12}" for c in cols))
+    for g in list(group_names) + ["all"]:
+        row = ""
+        for c in cols:
+            cell = matrix.get((g, c))
+            row += f"{100 * cell[0] * cell[1] / grand:>12.2f}" if cell else f"{'-':>12}"
+        print(f"{g:<24}{row}")
+
 
 # ---------------------------------------------------------------------------
 # E6 — downstream evals via lm-evaluation-harness

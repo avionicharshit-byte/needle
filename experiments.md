@@ -1,7 +1,10 @@
 # Simple Attention Networks — Experiment Design
 
 Paper: **"A Controlled Study of Attention-Only Transformers"**.
-Target: NeurIPS main track. Hardware: one 8×H100 node. Data: PleIAs/SYNTH
+Target: AAAI-27 main track — abstract 2026-07-21, full paper 2026-07-28,
+supplementary 2026-07-31, phase-1 2026-09-24, decisions 2026-11-30
+(7-page main text; arXiv preprint at submission; NeurIPS workshop in the
+fall as non-archival companion). Hardware: one 8×H100 node. Data: PleIAs/SYNTH
 (~78M docs ≈ 68B tokens, ChatML + reasoning traces, 16k BPE, seq_len 2048,
 doc-masked packing). Theory and predictions P1–P8: `theory.md`.
 
@@ -262,6 +265,19 @@ editing **−0.017** (noise floor ~0.002).
 - isoF row valid (true 100k ckpt): all-loss 1.7198. **isoD row void** —
   HF held a 40k-step state (upload incident, §10); redo after the tail
   rerun.
+- **Additive decomposition verified (2026-07-19).** Token shares: query
+  5.8 / trace 57.2 / answer 35.9 / other 1.0 (%); loss shares 7.9 / 55.4 /
+  36.6 / 0.1 (memorization-answer alone = 33.7% of loss). Σ(token-share ×
+  region-Δ) = 0.0113 = the measured aggregate Δ. The gap is concentrated:
+  query's per-token Δ (0.052) ≈ 5× the aggregate; all other regions ≤0.011.
+  `print_decomposition` now emits the loss-share matrix.
+- **PRE-REGISTERED before the fineweb pair runs: the storage account
+  predicts the fineweb-edu iso-param gap at 30k steps lands in 0.02–0.05
+  nats** — natural web text is mostly low-context prediction, bounded above
+  by SYNTH's pure query-region Δ (0.052), well above SYNTH's aggregate
+  (0.011–0.019).
+- Scale-resolution of the region gaps (reviewer claim 2): E4 over the five
+  ladder pairs, queued in the final eval suite.
 
 ### E5 — Data scaling (CLOSED 2026-07-19; 6 × 31.5B = 189B + E2 full-data cells)
 `--max-docs` ∈ {2M, 8M, 32M, full}; runs `e5_{arm}_muon_<docs>docs_31B_s42`,
@@ -354,16 +370,6 @@ Weight stable rank (energy concentration, ‖A‖²_F/‖A‖²₂), SAN base:
 5. Gate trajectories heatmap (layers × time).
 6. Optimizer×architecture interaction bars (E2).
 7. Downstream table vs Monad/Baguettotron (E6).
-
-## 6. Infrastructure to build
-
-| Need | Size |
-|---|---|
-| ~~Residual/norm variant flags~~ DONE 2026-07-16 (`--residual {gated,rezero,standard,none}`, `--norm {zcrms,rms}`, `--no-qk-norm`, `--post-attn-norm`) | architecture.py |
-| ~~Per-exercise/per-region loss slicing~~ DONE 2026-07-17 (`san eval --by-exercise --by-region [--group-field language] [--val-docs N]`; whole-doc packing, labels from marker ids, validated on E2 ckpt) | eval.py |
-| ~~lm-eval loglikelihood adapter~~ DONE 2026-07-17 (`san eval --checkpoint X --tasks sciq …`; needs `pip install lm-eval` on the eval pod; validated: sciq acc 0.70 @limit 20 on E2 SAN ckpt) | eval.py |
-| ~~SV-spectra script~~ DONE 2026-07-17 (`san spectra <ckpts> --out spectra`; per-kernel SVs + effective/stable rank to npz) | spectra.py |
-| Param/FLOP calculator script | trivial |
 
 Run naming: `{arch}_{opt}_{size}_{tokens}_{seed}`, e.g. `san_muon_base_105B_s42`.
 

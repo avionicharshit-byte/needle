@@ -1,9 +1,43 @@
-# Simple Attention Networks
+# Title: A Controlled Study of Attention-Only Transformers
 
-Can MLPs be dropped from transformer networks entirely? SAN is the
-attention-only arm of a controlled test of that question on reasoning-oriented
-pretraining. Rigorous argument: [theory.md](theory.md). Experiment design:
-[experiments.md](experiments.md).
+Can MLPs be dropped from transformer networks entirely? SAN (Simple
+Attention Networks) is the attention-only arm of a controlled test of that
+question on reasoning-oriented pretraining. Rigorous argument:
+[theory.md](theory.md). Experiment design: [experiments.md](experiments.md).
+
+## Abstract (AAAI-27)
+
+Feed-forward networks hold two thirds of a transformer's non-embedding
+parameters, yet the architecture has not received a necessity test that
+controls parameters, compute, and depth at once. We pretrain attention-only
+decoder transformers (Simple Attention Networks) against standard
+transformers matched separately for parameter count, training FLOPs, and
+depth (2 to 48 layers across arms), with per-arm learning-rate sweeps, for
+up to 105B tokens (1.5 epochs of a 68B-token reasoning-dense corpus) at 6M
+to 87M parameters. Deleting feed-forward layers in place is costly: the
+standard transformer leads by 0.47 nats at matched depth, and by 0.26 nats
+at matched training FLOPs, where attention spends compute on the
+parameter-free quadratic term and so carries fewer parameters at equal
+cost. Reallocating the freed budget into attention depth closes the gap: at
+matched parameter count the difference is about 0.006 nats, within
+cross-seed variability (three seeds per arm), shrinking across separately
+trained 5B, 30B, and 105B budgets, and not growing with model size over a
+29x non-embedding parameter range at fixed tokens. Three independent
+measurements localize the remaining gap to parametric recall: loss over
+token regions, loss over task types, and zero-shot benchmarks.
+Attention-only models are better on context-grounded answers and worse
+where knowledge must come from weights. Weight spectra show why: routing
+matrices (Q/K) crystallize in the first quarter of training while content
+matrices accumulate rank throughout, and removing feed-forward layers
+relocates this accumulation to the attention output projection.
+QK-normalization, not feed-forward layers or residual gating, keeps
+48-layer attention-only stacks trainable. The gap is concentrated, not
+diffuse: low-context query prediction carries a per-token deficit five
+times the aggregate but only 8 percent of corpus loss, and the
+token-weighted decomposition reproduces the aggregate gap to within 2
+percent. The same account predicts a wider aggregate gap on knowledge-dense
+text, where low-context prediction dominates. Within the tested regime,
+attention does the rest.
 
 ```
       ┌───────────────┐
@@ -21,11 +55,15 @@ pretraining. Rigorous argument: [theory.md](theory.md). Experiment design:
       ┌───────┴─────────────────────────────┐
       │       │                             │   Block × N
       │       ▲ y                           │
-      │      (+)◄─────────────────────┐     │   y = x + σ(g)·o
+      │      (+)◄─────────────────────┐     │   y = x + σ(g)·ZCRMSNorm(o)
       │       ▲                       │     │
       │     × σ(g)                    │     │   σ(g): learnable scalar gate,
       │       ▲                       │     │   g init 0 → σ(g) = 0.5
-      │   o = W_o·(A·v)               │     │
+      │   ZCRMSNorm(o)                │     │
+      │       ▲                       │     │   post-attn (sandwich) norm,
+      │   o = W_o·(A·v)               │     │   placed before the gate:
+      │       ▲                       │     │   norms are scale-invariant,
+      │       │                       │     │   after it would erase σ(g)
       │       ▲                       │     │
       │   A = softmax(q·kᵀ/√d + M)    │     │   GQA + causal mask
       │       ▲                       │     │
@@ -52,6 +90,11 @@ Decoder-only, pretrained on streaming HF datasets (default [PleIAs/SYNTH](https:
 The FFN-equipped standard transformer is the built-in control arm (`--ffn`), and the
 optimizer is switchable (`--optimizer muon|adamw`), so the {muon, adamw} × {ffn, no-ffn}
 2×2 runs from one code path.
+
+The post-attention (sandwich) norm is adopted from the E3 ablations, where it
+was the only variant to improve on the baseline (`--post-attn-norm`, −0.009
+nats at 21B tokens). The E1/E2 headline checkpoints predate it and use the
+block without it; all E3 comparisons are internal to that sweep.
 
 ## Why No FFN
 
