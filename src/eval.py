@@ -1,4 +1,7 @@
+import contextlib
 import math
+import os
+import sys
 import time
 
 import jax
@@ -14,6 +17,48 @@ from .tokenizer import (
 from .data import resolve_dataset, build_val_set, stream_examples, _encode_stream
 from .architecture import SimpleAttentionNetwork, make_causal_packing_mask
 from .run import load_checkpoint, generate
+
+class _Tee:
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, s):
+        for st in self.streams:
+            st.write(s)
+
+    def flush(self):
+        for st in self.streams:
+            st.flush()
+
+
+@contextlib.contextmanager
+def tee_stdout(path):
+    """Duplicate stdout into `path` — eval reports must survive pod loss."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w") as f:
+        old = sys.stdout
+        sys.stdout = _Tee(old, f)
+        try:
+            yield
+        finally:
+            sys.stdout = old
+
+
+def upload_result(path, dest_dir="results"):
+    """Push a result file to the HF repo (short retries, non-fatal)."""
+    from huggingface_hub import HfApi
+    from .tokenizer import HF_REPO
+    for attempt in range(3):
+        try:
+            HfApi().upload_file(path_or_fileobj=path,
+                                path_in_repo=f"{dest_dir}/{os.path.basename(path)}",
+                                repo_id=HF_REPO, repo_type="model")
+            print(f"[hf] results uploaded: {dest_dir}/{os.path.basename(path)}")
+            return
+        except Exception as e:
+            print(f"[hf] results upload attempt {attempt + 1}/3 failed: {e}")
+            time.sleep(10 * (attempt + 1))
+
 
 _val_loss_fn_cache = {}
 
@@ -426,6 +471,21 @@ def evaluate_downstream(model, params, tokenizer, tasks, seq_len=2048, batch_siz
 
 
 def main(args):
+    stem = os.path.splitext(os.path.basename(args.checkpoint))[0]
+    if getattr(args, "tasks", None):
+        mode = "e6"
+    elif getattr(args, "by_exercise", False) or getattr(args, "by_region", False):
+        mode = "e4"
+    else:
+        mode = "val"
+    out_path = os.path.join("results", f"{stem}__{mode}.txt")
+    with tee_stdout(out_path):
+        _main(args)
+    if getattr(args, "upload_results", False):
+        upload_result(out_path)
+
+
+def _main(args):
     params, config = load_checkpoint(args.checkpoint)
     model = SimpleAttentionNetwork(config)
     tokenizer = get_tokenizer()

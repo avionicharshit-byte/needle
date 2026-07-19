@@ -47,7 +47,19 @@ def spectra(params):
 
 
 def main(args):
+    from .eval import tee_stdout, upload_result
     os.makedirs(args.out, exist_ok=True)
+    summary_path = os.path.join(args.out, "spectra_summary.txt")
+    with tee_stdout(summary_path):
+        _run(args)
+    if getattr(args, "upload_results", False):
+        upload_result(summary_path, dest_dir="results/spectra")
+        for f in sorted(os.listdir(args.out)):
+            if f.endswith(".npz"):
+                upload_result(os.path.join(args.out, f), dest_dir="results/spectra")
+
+
+def _run(args):
 
     for path in args.checkpoints:
         with open(path, "rb") as f:

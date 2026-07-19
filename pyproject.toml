@@ -13,6 +13,7 @@ dependencies = [
     "wandb",
     "sentencepiece",
     "tqdm",
+    "lm-eval",
 ]
 
 [project.optional-dependencies]

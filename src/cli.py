@@ -207,6 +207,8 @@ def main():
                         "globs need local files — hf download the milestones first)")
     p.add_argument("--out", type=str, default="spectra",
                    help="Output dir for per-checkpoint .npz (default: spectra)")
+    p.add_argument("--upload-results", action="store_true",
+                   help="Upload the summary .txt + .npz files to the HF repo (results/spectra/)")
 
     p = sub.add_parser("sample", add_help=False)
     p.add_argument("--checkpoint", type=str, required=True)
@@ -236,7 +238,9 @@ def main():
     p.add_argument("--val-docs", type=int, default=20_000,
                    help="Documents for the E4 decomposition (default: 20000)")
     p.add_argument("--tasks", type=str, nargs="*", default=None,
-                   help="Reserved: downstream tasks (lm-eval-harness adapter, future)")
+                   help="Downstream lm-eval tasks (E6), e.g. sciq hellaswag mmlu")
+    p.add_argument("--upload-results", action="store_true",
+                   help="Also upload the results .txt to the HF repo (results/)")
 
     args = parser.parse_args()
 

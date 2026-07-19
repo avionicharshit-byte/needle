@@ -78,26 +78,32 @@ def _upload_checkpoint(ckpt_path, wait=False):
     import threading
 
     def _upload():
-        try:
-            from huggingface_hub import HfApi
-            api = HfApi()
-            api.create_repo(HF_REPO, repo_type="model", private=True, exist_ok=True)
-            filename = os.path.basename(ckpt_path)
-            print(f"[hf] Uploading {filename} to {HF_REPO}/checkpoints/ ...")
-            api.upload_file(
-                path_or_fileobj=ckpt_path,
-                path_in_repo=f"checkpoints/{filename}",
-                repo_id=HF_REPO,
-                repo_type="model",
-            )
-            print(f"[hf] Checkpoint uploaded: {HF_REPO}/checkpoints/{filename}")
-        except Exception as e:
-            print(f"[hf] Warning: checkpoint upload failed: {e}")
+        from huggingface_hub import HfApi
+        filename = os.path.basename(ckpt_path)
+        for attempt in range(5):
+            try:
+                api = HfApi()
+                api.create_repo(HF_REPO, repo_type="model", private=True, exist_ok=True)
+                print(f"[hf] Uploading {filename} to {HF_REPO}/checkpoints/ ...")
+                api.upload_file(
+                    path_or_fileobj=ckpt_path,
+                    path_in_repo=f"checkpoints/{filename}",
+                    repo_id=HF_REPO,
+                    repo_type="model",
+                )
+                print(f"[hf] Checkpoint uploaded: {HF_REPO}/checkpoints/{filename}")
+                return
+            except Exception as e:
+                wait_s = 30 * 2 ** attempt
+                print(f"[hf] Upload attempt {attempt + 1}/5 failed: {e} — retry in {wait_s}s")
+                time.sleep(wait_s)
+        print(f"[hf] ERROR: {filename} NOT uploaded after 5 attempts — "
+              f"HF copy is stale; do not delete this pod before re-uploading.")
 
     t = threading.Thread(target=_upload, daemon=True)
     t.start()
     if wait:
-        t.join(timeout=900)
+        t.join(timeout=3600) 
 
 
 def _losses(apply_fn, params, tokens, seg_ids):
