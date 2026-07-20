@@ -1,19 +1,23 @@
 % Table 5: region decomposition (SAN - FFN iso-param)
-\begin{table}[t]\centering\small
-\begin{tabular}{lcccc}
+\begin{table}[tb]\centering\footnotesize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}lcccc@{}}
 \toprule
 & query & trace & answer & all \\
+\midrule
 token share (\%) & 5.8 & 57.2 & 35.9 & 100 \\
 loss share (\%) & 7.9 & 55.4 & 36.6 & 100 \\
 \midrule
-$\Delta$ @31B & $+0.0517$ & $+0.0075$ & $+0.0112$ & $+0.0113$ \\
-$\Delta$ @105B (clean seeds) & $+0.0377$ & $-0.0035$ & $-0.0073$ & $-0.0025$ \\
+$\Delta$ @31B & $+.052$ & $+.008$ & $+.011$ & $+.011$ \\
+$\Delta$ @105B (clean) & $+.038$ & $-.004$ & $-.007$ & $-.0025$ \\
 \bottomrule
 \end{tabular}
-\caption{Token-weighted decomposition ($\sum$ share $\times$ region-$\Delta$
-reproduces the aggregate to within 2\%). The deficit concentrates on
-low-context query tokens and localizes there entirely by 105B; the same
-account predicts the fineweb gap (measured 0.040, pre-registered window
-0.02--0.05).}
+\caption{Token-weighted decomposition on the decomposition sample (Setup;
+training-exposed, not the held-out pool): $\sum$ share $\times$
+region-$\Delta$ reproduces the sample aggregate to within 2\%. Point
+estimates; per-block losses were not retained. The deficit
+concentrates on low-context query tokens and localizes there entirely by
+105B; the same account predicts the fineweb gap (measured 0.040,
+pre-registered window 0.02--0.05).}
 \label{tab:regions}
 \end{table}

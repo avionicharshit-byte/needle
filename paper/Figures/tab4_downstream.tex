@@ -1,25 +1,30 @@
 % Table 4: 0-shot downstream (lm-eval-harness). lambada: acc (ppl).
-\begin{table*}[t]\centering\small
+\begin{table*}[t]\centering\footnotesize
 \begin{tabular}{lccccccc}
 \toprule
-Model & lambada & sciq & arc\_easy & piqa & hellaswag & winogrande & mmlu \\
+Model & lambada (ppl) & sciq & arc\_easy & piqa & hellaswag & winogrande & mmlu \\
 \midrule
 chance & $\sim$0 & 0.25 & 0.25 & 0.50 & 0.25 & 0.50 & 0.25 \\
 \midrule
 SAN 24M @31B & 0.091 (821) & 0.725 & 0.397 & 0.545 & 0.279 & 0.504 & 0.236 \\
-FFN iso-param 24M @31B & 0.136 (492) & 0.702 & 0.416 & 0.563 & 0.283 & 0.516 & 0.233 \\
-SAN 24M @105B (3-seed mean) & 0.111 (682) & 0.742 & 0.405 & 0.559 & 0.284 & 0.517 & 0.232 \\
-FFN iso-param 24M @105B (3-seed mean) & 0.134 (518) & 0.661 & 0.415 & 0.558 & 0.283 & 0.511 & 0.245 \\
+FFN iso-param @31B & 0.136 (492) & 0.702 & 0.416 & 0.563 & 0.283 & 0.516 & 0.233 \\
+SAN 24M @105B (3s) & 0.111 (682) & 0.742 & 0.405 & 0.559 & 0.284 & 0.517 & 0.232 \\
+FFN iso-param @105B (3s) & 0.134 (518) & 0.661 & 0.415 & 0.558 & 0.283 & 0.511 & 0.245 \\
+FFN iso-FLOP 43M @105B & 0.178 (451) & 0.634 & 0.419 & 0.562 & 0.293 & 0.534 & 0.230 \\
+FFN iso-depth 87M @105B & 0.111 (964) & 0.630 & 0.426 & 0.552 & 0.288 & 0.525 & 0.233 \\
 \midrule
-SAN 24M, fineweb-trained @31B & 0.203 (189) & 0.705 & 0.447 & 0.579 & 0.294 & 0.507 & 0.231 \\
-FFN iso-param, fineweb-trained @31B & 0.181 (218) & 0.707 & 0.478 & 0.588 & 0.287 & 0.507 & 0.232 \\
+SAN fineweb-trained @31B & 0.203 (189) & 0.705 & 0.447 & 0.579 & 0.294 & 0.507 & 0.231 \\
+FFN fineweb-trained @31B & 0.181 (218) & 0.707 & 0.478 & 0.588 & 0.287 & 0.507 & 0.232 \\
 \bottomrule
 \end{tabular}
-\caption{The storage/routing split at task level: lambada (parametric recall
-for SYNTH-trained models) favors the FFN at every budget; sciq (support
-passage in context) favors the SAN, with the margin growing with training
-(pre-registered direction; seed ranges non-overlapping at 105B). Trained on
-knowledge-dense fineweb-edu, the lambada preference reverses: task identity
-is relative to the training distribution.}
+\caption{The storage/routing split at task level. Lambada (out-of-distribution
+recall for SYNTH-trained models) favors the FFN at every budget, but is
+non-monotone in FFN capacity: iso-depth (87M), the best in-distribution model,
+is the worst at it (0.111, ppl 964). Sciq (support passage in context) favors
+the SAN with a margin that grows with training in the pre-registered direction
+(seed ranges non-overlapping at 105B) and falls monotonically with FFN
+capacity. Trained on knowledge-dense fineweb-edu, the lambada preference
+reverses: a task's storage/routing identity is relative to the training
+distribution. Remaining tasks are at chance at these scales.}
 \label{tab:downstream}
 \end{table*}

@@ -9,39 +9,45 @@ registered 2026-07-14).
 
 ## Abstract (AAAI-27)
 
-Feed-forward networks hold two thirds of a transformer's non-embedding
-parameters, yet the architecture has not received a necessity test that
-controls parameters, compute, and depth at once. We pretrain attention-only
-decoder transformers (Simple Attention Networks) against standard
-transformers matched separately for parameter count, training FLOPs, and
-depth (2 to 48 layers across arms), with per-arm learning-rate sweeps, for
-up to 105B tokens (1.5 epochs of a 68B-token reasoning-dense corpus) at 6M
-to 87M parameters. Deleting feed-forward layers in place is costly: the
-standard transformer leads by 0.47 nats at matched depth, and by 0.26 nats
-at matched training FLOPs, where attention spends compute on the
-parameter-free quadratic term and so carries fewer parameters at equal
-cost. Reallocating the freed budget into attention depth closes the gap: at
-matched parameter count the difference is about 0.006 nats, within
-cross-seed variability (three seeds per arm), shrinking across separately
-trained 5B, 30B, and 105B budgets, and not growing with model size over a
-29x non-embedding parameter range at fixed tokens. Three independent
-measurements localize the remaining gap to parametric recall: loss over
-token regions, loss over task types, and zero-shot benchmarks.
-Attention-only models are better on context-grounded answers and worse
-where knowledge must come from weights. Weight spectra show why: routing
-matrices (Q/K) crystallize in the first quarter of training while content
-matrices accumulate rank throughout, and removing feed-forward layers
-relocates this accumulation to the attention output projection.
-QK-normalization, not feed-forward layers or residual gating, keeps
-48-layer attention-only stacks trainable. The gap is concentrated, not
-diffuse: low-context query prediction carries a per-token deficit five
-times the aggregate but only 8 percent of corpus loss, and the
-token-weighted decomposition reproduces the aggregate gap to within 2
-percent; by the largest budget the deficit localizes there entirely, the
-attention-only model ahead on every answer region. A pre-registered test
-confirms the account: it predicts a 0.02 to 0.05 nat gap on knowledge-dense
-web text, and a matched pair trained on fineweb-edu measures 0.040. Within
-the tested regime, attention does the rest.
+Feed-forward networks hold two thirds of a transformer’s non-
+embedding parameters, yet the architecture has not received a
+necessity test that controls parameters, compute, and depth at
+once. We pretrain attention-only decoder transformers (Sim-
+ple Attention Networks, SANs) against standard transformers
+matched separately for parameter count, training FLOPs, and
+depth (2 to 48 layers across arms), with per-arm learning-
+rate sweeps, for up to 105B tokens (1.5 epochs of a 68B-
+token reasoning-dense corpus) at 6M to 87M total parameters.
+Deleting feed-forward layers in place is costly: the standard
+transformer leads by 0.47 nats at matched depth, and by 0.26
+nats at matched training FLOPs, where attention spends com-
+pute on the parameter-free quadratic term and so carries fewer
+parameters at equal cost. Reallocating the freed budget into
+attention depth closes the gap: at matched parameter count
+the difference is 0.006 nats, 0.27 percent of loss, reproducible
+to one part in ten thousand across clean seed pairs, shrink-
+ing across separately trained 5B, 30B, and 105B budgets,
+and holding near 0.02 nats across a 29x non-embedding size
+range at a fixed 31.5B-token budget. Three independent mea-
+surements localize the remaining gap to parametric recall: loss
+over token regions, loss over task types, and zero-shot bench-
+marks. Attention-only models are better on context-grounded
+answers and worse where knowledge must come from weights.
+Weight spectra show why: routing matrices (Q/K) crystallize
+in the first quarter of training while content matrices accumu-
+late rank through the stable phase, and removing feed-forward
+layers relocates this accumulation to the attention output pro-
+jection. QK-normalization, not feed-forward layers or resid-
+ual gating, keeps 48-layer attention-only stacks trainable. The
+gap is concentrated, not diffuse: low-context query prediction
+carries a per-token deficit five times the aggregate but only
+8 percent of corpus loss, and the token-weighted decompo-
+sition reproduces its own aggregate to within 2 percent; by
+the largest budget the deficit localizes there entirely on that
+sample. A pre-registered test confirms the account: it predicts
+a 0.02 to 0.05 nat gap on knowledge-dense web text, and a
+matched pair trained on fineweb-edu measures 0.040. Within
+the tested regime, attention does the rest
 
 ```
       ┌───────────────┐

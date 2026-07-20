@@ -1,25 +1,27 @@
 % Table 3: E3 component ablations @21B tokens
-\begin{table}[t]\centering\small
-\begin{tabular}{lll}
+\begin{table}[tb]\centering\footnotesize
+\setlength{\tabcolsep}{3.5pt}
+\begin{tabular}{@{}lll@{}}
 \toprule
 Variant & Val loss & $\Delta$ vs gated \\
 \midrule
 gated (baseline, 20L) & 2.1343 & --- \\
-$+$ post-attn (sandwich) norm & \textbf{2.1251} & $-0.0092$ \\
+$+$ sandwich norm & \textbf{2.1251} & $-0.0092$ \\
 standard residual & 2.1330 & $-0.0013$ \\
 ReZero residual & 2.1375 & $+0.0032$ \\
-RMSNorm $\gamma{=}1$ (equiv.\ control) & 2.1358 & $+0.0015$ \\
+RMSNorm $\gamma{=}1$ (control) & 2.1358 & $+0.0015$ \\
 no residual & 2.8826 & $+0.75$ \\
 no QK-norm & \emph{diverges} (8.28) & --- \\
 \midrule
-depth 8L / 32L / 48L (gated) & 2.168 / 2.153 / 2.175 & $+0.034$ / $+0.019$ / $+0.041$ \\
-\quad same, standard residual & 2.164 / 2.150 / 2.177 & gates neutral at all depths \\
-FFN 20L gated / standard & 1.6977 / \textbf{1.6930} & neutral in FFN arm too \\
+depth 8/32/48L, gated & 2.168/2.153/2.175 & U-shaped \\
+\quad standard residual & 2.164/2.150/2.177 & gates neutral \\
+FFN 20L gated/standard & 1.6977/\textbf{1.6930} & neutral \\
 \bottomrule
 \end{tabular}
-\caption{QK-norm is the load-bearing component; gates are performance-neutral
-everywhere (their value is diagnostic); sandwich norm is the only improvement.
-The RMSNorm control is optimizer-equivalent by construction and calibrates
-the same-seed noise floor (0.0015).}
+\caption{QK-norm is the load-bearing component; gates are
+performance-neutral at every depth and in both architectures (their value
+was diagnostic); sandwich norm is the only improvement. The RMSNorm
+control is optimizer-equivalent by construction and calibrates the
+same-seed noise floor (0.0015).}
 \label{tab:ablations}
 \end{table}

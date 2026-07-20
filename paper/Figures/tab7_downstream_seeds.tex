@@ -1,0 +1,20 @@
+% Supplementary: per-seed downstream results, 105B pairs
+\begin{table*}[t]\centering\footnotesize
+\begin{tabular}{lccccccc}
+\toprule
+Model & lambada (ppl) & sciq & arc\_easy & piqa & hellaswag & winogrande & mmlu \\
+\midrule
+SAN @105B, seed 42 & 0.109 (733) & 0.718 & 0.384 & 0.562 & 0.284 & 0.518 & 0.231 \\
+SAN @105B, seed 43 & 0.115 (633) & 0.752 & 0.414 & 0.560 & 0.285 & 0.530 & 0.232 \\
+SAN @105B, seed 44 & 0.110 (682) & 0.757 & 0.419 & 0.555 & 0.282 & 0.504 & 0.232 \\
+\midrule
+FFN iso-param @105B, seed 42 & 0.143 (577) & 0.650 & 0.401 & 0.559 & 0.287 & 0.494 & 0.234 \\
+FFN iso-param @105B, seed 43$^\dagger$ & 0.128 (482) & 0.660 & 0.426 & 0.559 & 0.279 & 0.518 & 0.247 \\
+FFN iso-param @105B, seed 44 & 0.132 (493) & 0.673 & 0.418 & 0.555 & 0.282 & 0.521 & 0.254 \\
+\bottomrule
+\end{tabular}
+\caption{Per-seed 0-shot results behind the 105B means of the main text.
+Sciq seed ranges do not overlap between arms (SAN 0.718--0.757 vs.\ FFN
+0.650--0.673). $^\dagger$The seed with the terminal-phase instability.}
+\label{tab:downstream_seeds}
+\end{table*}
