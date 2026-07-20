@@ -1,0 +1,206 @@
+\begin{thebibliography}{34}
+\providecommand{\natexlab}[1]{#1}
+
+\bibitem[{Bachlechner et~al.(2020)Bachlechner, Majumder, Mao, Cottrell, and
+  McAuley}]{bachlechner2020rezero}
+Bachlechner, T.; Majumder, B.~P.; Mao, H.~H.; Cottrell, G.~W.; and McAuley, J.
+  2020.
+\newblock {ReZero} Is All You Need: Fast Convergence at Large Depth.
+\newblock \emph{arXiv preprint arXiv:2003.04887}.
+
+\bibitem[{Dai et~al.(2022)Dai, Dong, Hao, Sui, Chang, and
+  Wei}]{dai2022knowledge}
+Dai, D.; Dong, L.; Hao, Y.; Sui, Z.; Chang, B.; and Wei, F. 2022.
+\newblock Knowledge Neurons in Pretrained Transformers.
+\newblock In \emph{Proceedings of ACL}.
+
+\bibitem[{Dehghani et~al.(2023)Dehghani, Djolonga, Mustafa
+  et~al.}]{dehghani2023scaling}
+Dehghani, M.; Djolonga, J.; Mustafa, B.; et~al. 2023.
+\newblock Scaling Vision Transformers to 22 Billion Parameters.
+\newblock In \emph{International Conference on Machine Learning}.
+
+\bibitem[{Dong, Cordonnier, and Loukas(2021)}]{dong2021attention}
+Dong, Y.; Cordonnier, J.-B.; and Loukas, A. 2021.
+\newblock Attention Is Not All You Need: Pure Attention Loses Rank Doubly
+  Exponentially with Depth.
+\newblock In \emph{International Conference on Machine Learning}.
+
+\bibitem[{Eldan and Li(2023)}]{eldan2023tinystories}
+Eldan, R.; and Li, Y. 2023.
+\newblock {TinyStories}: How Small Can Language Models Be and Still Speak
+  Coherent English?
+\newblock \emph{arXiv preprint arXiv:2305.07759}.
+
+\bibitem[{Elhage et~al.(2021)Elhage, Nanda, Olsson
+  et~al.}]{elhage2021mathematical}
+Elhage, N.; Nanda, N.; Olsson, C.; et~al. 2021.
+\newblock A Mathematical Framework for Transformer Circuits.
+\newblock \emph{Transformer Circuits Thread}.
+
+\bibitem[{Feng et~al.(2023)Feng, Zhang, Gu, Ye, He, and Wang}]{feng2023towards}
+Feng, G.; Zhang, B.; Gu, Y.; Ye, H.; He, D.; and Wang, L. 2023.
+\newblock Towards Revealing the Mystery behind Chain of Thought: A Theoretical
+  Perspective.
+\newblock In \emph{Advances in Neural Information Processing Systems}.
+
+\bibitem[{Gao et~al.(2023)Gao, Tow, Abbasi et~al.}]{gao2023lmeval}
+Gao, L.; Tow, J.; Abbasi, B.; et~al. 2023.
+\newblock A Framework for Few-Shot Language Model Evaluation.
+\newblock \url{https://github.com/EleutherAI/lm-evaluation-harness}.
+
+\bibitem[{Geva et~al.(2022)Geva, Caciularu, Wang, and
+  Goldberg}]{geva2022transformer}
+Geva, M.; Caciularu, A.; Wang, K.~R.; and Goldberg, Y. 2022.
+\newblock Transformer Feed-Forward Layers Build Predictions by Promoting
+  Concepts in the Vocabulary Space.
+\newblock In \emph{Proceedings of EMNLP}.
+
+\bibitem[{Geva et~al.(2021)Geva, Schuster, Berant, and
+  Levy}]{geva2021transformer}
+Geva, M.; Schuster, R.; Berant, J.; and Levy, O. 2021.
+\newblock Transformer Feed-Forward Layers Are Key-Value Memories.
+\newblock In \emph{Proceedings of EMNLP}.
+
+\bibitem[{Gunasekar et~al.(2023)Gunasekar, Zhang, Aneja
+  et~al.}]{gunasekar2023textbooks}
+Gunasekar, S.; Zhang, Y.; Aneja, J.; et~al. 2023.
+\newblock Textbooks Are All You Need.
+\newblock \emph{arXiv preprint arXiv:2306.11644}.
+
+\bibitem[{He and Hofmann(2024)}]{he2024simplifying}
+He, B.; and Hofmann, T. 2024.
+\newblock Simplifying Transformer Blocks.
+\newblock In \emph{International Conference on Learning Representations}.
+
+\bibitem[{Henry et~al.(2020)Henry, Dachapally, Pawar, and
+  Chen}]{henry2020query}
+Henry, A.; Dachapally, P.~R.; Pawar, S.~S.; and Chen, Y. 2020.
+\newblock Query-Key Normalization for Transformers.
+\newblock In \emph{Findings of EMNLP}.
+
+\bibitem[{Hoffmann et~al.(2022)Hoffmann, Borgeaud, Mensch
+  et~al.}]{hoffmann2022chinchilla}
+Hoffmann, J.; Borgeaud, S.; Mensch, A.; et~al. 2022.
+\newblock Training Compute-Optimal Large Language Models.
+\newblock \emph{arXiv preprint arXiv:2203.15556}.
+
+\bibitem[{Jordan et~al.(2024)Jordan, Jin, Boza, You, Cesista, Newhouse, and
+  Bernstein}]{jordan2024muon}
+Jordan, K.; Jin, Y.; Boza, V.; You, J.; Cesista, F.; Newhouse, L.; and
+  Bernstein, J. 2024.
+\newblock Muon: An Optimizer for Hidden Layers in Neural Networks.
+\newblock \url{https://kellerjordan.github.io/posts/muon/}.
+
+\bibitem[{{Kimi Team}(2026)}]{kimi2026attnres}
+{Kimi Team}. 2026.
+\newblock Attention Residuals.
+\newblock \emph{arXiv preprint arXiv:2603.15031}.
+
+\bibitem[{Liu et~al.(2021)Liu, Dai, So, and Le}]{liu2021pay}
+Liu, H.; Dai, Z.; So, D.; and Le, Q.~V. 2021.
+\newblock Pay Attention to {MLP}s.
+\newblock In \emph{Advances in Neural Information Processing Systems}.
+
+\bibitem[{Liu et~al.(2025)Liu, Su, Yao et~al.}]{liu2025muon}
+Liu, J.; Su, J.; Yao, X.; et~al. 2025.
+\newblock Muon Is Scalable for {LLM} Training.
+\newblock \emph{arXiv preprint arXiv:2502.16982}.
+
+\bibitem[{Meng et~al.(2022)Meng, Bau, Andonian, and
+  Belinkov}]{meng2022locating}
+Meng, K.; Bau, D.; Andonian, A.; and Belinkov, Y. 2022.
+\newblock Locating and Editing Factual Associations in {GPT}.
+\newblock In \emph{Advances in Neural Information Processing Systems}.
+
+\bibitem[{Merrill and Sabharwal(2024)}]{merrill2024expressive}
+Merrill, W.; and Sabharwal, A. 2024.
+\newblock The Expressive Power of Transformers with Chain of Thought.
+\newblock In \emph{International Conference on Learning Representations}.
+
+\bibitem[{Muennighoff et~al.(2023)Muennighoff, Rush, Barak
+  et~al.}]{muennighoff2023scaling}
+Muennighoff, N.; Rush, A.~M.; Barak, B.; et~al. 2023.
+\newblock Scaling Data-Constrained Language Models.
+\newblock In \emph{Advances in Neural Information Processing Systems}.
+
+\bibitem[{Noci et~al.(2022)Noci, Anagnostidis, Biggio, Orvieto, Singh, and
+  Lucchi}]{noci2022signal}
+Noci, L.; Anagnostidis, S.; Biggio, L.; Orvieto, A.; Singh, S.~P.; and Lucchi,
+  A. 2022.
+\newblock Signal Propagation in Transformers: Theoretical Perspectives and the
+  Role of Rank Collapse.
+\newblock In \emph{Advances in Neural Information Processing Systems}.
+
+\bibitem[{{OLMo Team}(2024)}]{olmo2024olmo2}
+{OLMo Team}. 2024.
+\newblock 2 {OLMo} 2 Furious.
+\newblock \emph{arXiv preprint arXiv:2501.00656}.
+
+\bibitem[{Olsson et~al.(2022)Olsson, Elhage, Nanda et~al.}]{olsson2022context}
+Olsson, C.; Elhage, N.; Nanda, N.; et~al. 2022.
+\newblock In-Context Learning and Induction Heads.
+\newblock \emph{Transformer Circuits Thread}.
+
+\bibitem[{Penedo et~al.(2024)Penedo, Kydl{\'\i}{\v{c}}ek, Lozhkov
+  et~al.}]{penedo2024fineweb}
+Penedo, G.; Kydl{\'\i}{\v{c}}ek, H.; Lozhkov, A.; et~al. 2024.
+\newblock The {FineWeb} Datasets: Decanting the Web for the Finest Text Data at
+  Scale.
+\newblock \emph{arXiv preprint arXiv:2406.17557}.
+
+\bibitem[{Pires et~al.(2023)Pires, Lopes, Assogba, and Setiawan}]{pires2023one}
+Pires, T.~P.; Lopes, A.~V.; Assogba, Y.; and Setiawan, H. 2023.
+\newblock One Wide Feedforward Is All You Need.
+\newblock \emph{arXiv preprint arXiv:2309.01826}.
+
+\bibitem[{{PleIAs}(2025)}]{pleias2025synth}
+{PleIAs}. 2025.
+\newblock {SYNTH}: A Generalist Synthetic Dataset for Reasoning-First
+  Pretraining.
+\newblock \url{https://huggingface.co/datasets/PleIAs/SYNTH}.
+
+\bibitem[{Qiu et~al.(2025)Qiu, Wang, Zheng et~al.}]{qiu2025gated}
+Qiu, Z.; Wang, Z.; Zheng, B.; et~al. 2025.
+\newblock Gated Attention for Large Language Models: Non-Linearity, Sparsity,
+  and Attention-Sink-Free.
+\newblock \emph{arXiv preprint arXiv:2505.06708}.
+
+\bibitem[{Shleifer, Weston, and Ott(2021)}]{shleifer2021normformer}
+Shleifer, S.; Weston, J.; and Ott, M. 2021.
+\newblock {NormFormer}: Improved Transformer Pretraining with Extra
+  Normalization.
+\newblock \emph{arXiv preprint arXiv:2110.09456}.
+
+\bibitem[{Srivastava, Greff, and Schmidhuber(2015)}]{srivastava2015highway}
+Srivastava, R.~K.; Greff, K.; and Schmidhuber, J. 2015.
+\newblock Highway Networks.
+\newblock \emph{arXiv preprint arXiv:1505.00387}.
+
+\bibitem[{Sukhbaatar et~al.(2019)Sukhbaatar, Grave, Lample, Jegou, and
+  Joulin}]{sukhbaatar2019augmenting}
+Sukhbaatar, S.; Grave, E.; Lample, G.; Jegou, H.; and Joulin, A. 2019.
+\newblock Augmenting Self-Attention with Persistent Memory.
+\newblock \emph{arXiv preprint arXiv:1907.01470}.
+
+\bibitem[{Tolstikhin et~al.(2021)Tolstikhin, Houlsby, Kolesnikov
+  et~al.}]{tolstikhin2021mlp}
+Tolstikhin, I.~O.; Houlsby, N.; Kolesnikov, A.; et~al. 2021.
+\newblock {MLP}-Mixer: An All-{MLP} Architecture for Vision.
+\newblock In \emph{Advances in Neural Information Processing Systems}.
+
+\bibitem[{Vaswani et~al.(2017)Vaswani, Shazeer, Parmar, Uszkoreit, Jones,
+  Gomez, Kaiser, and Polosukhin}]{vaswani2017attention}
+Vaswani, A.; Shazeer, N.; Parmar, N.; Uszkoreit, J.; Jones, L.; Gomez, A.~N.;
+  Kaiser, {\L}.; and Polosukhin, I. 2017.
+\newblock Attention Is All You Need.
+\newblock In \emph{Advances in Neural Information Processing Systems}.
+
+\bibitem[{Yu et~al.(2022)Yu, Luo, Zhou, Si, Zhou, Wang, Feng, and
+  Yan}]{yu2022metaformer}
+Yu, W.; Luo, M.; Zhou, P.; Si, C.; Zhou, Y.; Wang, X.; Feng, J.; and Yan, S.
+  2022.
+\newblock MetaFormer Is Actually What You Need for Vision.
+\newblock In \emph{Proceedings of CVPR}.
+
+\end{thebibliography}
