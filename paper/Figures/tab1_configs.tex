@@ -1,0 +1,17 @@
+% Table 1: matched configurations
+\begin{table}[t]\centering\small
+\begin{tabular}{lllll}
+\toprule
+Arm & Config & Total & Non-emb. & GFLOPs/tok \\
+\midrule
+SAN (ours) & 20L $d{=}512$, no FFN & 24.13M & 15.74M & $\sim$0.40 \\
+FFN iso-param & 4L $d{=}512$, $d_{ff}{=}2048$ & 24.12M & 15.73M & $\sim$0.20 \\
+FFN iso-FLOP & 9L $d{=}512$, $d_{ff}{=}2048$ & 43M & 35M & $\sim$0.39 \\
+FFN iso-depth & 20L $d{=}512$, $d_{ff}{=}2048$ & 87.06M & 78.67M & $\sim$0.72 \\
+\bottomrule
+\end{tabular}
+\caption{The three matchings. Removing the FFN perturbs parameters, compute,
+and depth at once; each control fixes one axis. Iso-param match is exact to
+$<$0.04\%.}
+\label{tab:configs}
+\end{table}

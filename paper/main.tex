@@ -1,0 +1,453 @@
+\documentclass[letterpaper]{article} % DO NOT CHANGE THIS
+\usepackage[submission]{aaai2027}  % DO NOT CHANGE THIS
+\usepackage[hyphens]{url}  % DO NOT CHANGE THIS
+\usepackage{graphicx} % DO NOT CHANGE THIS
+\urlstyle{rm} % DO NOT CHANGE THIS
+\def\UrlFont{\rm}  % DO NOT CHANGE THIS
+\usepackage{natbib}  % DO NOT CHANGE THIS AND DO NOT ADD ANY OPTIONS TO IT
+\usepackage{caption} % DO NOT CHANGE THIS AND DO NOT ADD ANY OPTIONS TO IT
+\frenchspacing  % DO NOT CHANGE THIS
+\usepackage{booktabs}
+\usepackage{amsmath}
+\pdfinfo{
+/TemplateVersion (2027.1)
+}
+\setcounter{secnumdepth}{0}
+
+\title{A Controlled Study of Attention-Only Transformers}
+\author{
+    Anonymous Submission
+}
+\affiliations{
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Feed-forward networks hold two thirds of a transformer's non-embedding
+parameters, yet the architecture has not received a necessity test that
+controls parameters, compute, and depth at once. We pretrain attention-only
+decoder transformers (Simple Attention Networks, SANs) against standard
+transformers matched separately for parameter count, training FLOPs, and
+depth (2 to 48 layers across arms), with per-arm learning-rate sweeps, for
+up to 105B tokens (1.5 epochs of a 68B-token reasoning-dense corpus) at 6M
+to 87M parameters. Deleting feed-forward layers in place is costly: the
+standard transformer leads by 0.47 nats at matched depth, and by 0.26 nats
+at matched training FLOPs, where attention spends compute on the
+parameter-free quadratic term and so carries fewer parameters at equal
+cost. Reallocating the freed budget into attention depth closes the gap: at
+matched parameter count the difference is about 0.006 nats, within
+cross-seed variability (three seeds per arm), shrinking across separately
+trained 5B, 30B, and 105B budgets, and not growing with model size over a
+29x non-embedding parameter range at fixed tokens. Three independent
+measurements localize the remaining gap to parametric recall: loss over
+token regions, loss over task types, and zero-shot benchmarks.
+Attention-only models are better on context-grounded answers and worse
+where knowledge must come from weights. Weight spectra show why: routing
+matrices (Q/K) crystallize in the first quarter of training while content
+matrices accumulate rank throughout, and removing feed-forward layers
+relocates this accumulation to the attention output projection.
+QK-normalization, not feed-forward layers or residual gating, keeps
+48-layer attention-only stacks trainable. The gap is concentrated, not
+diffuse: low-context query prediction carries a per-token deficit five
+times the aggregate but only 8 percent of corpus loss, and the
+token-weighted decomposition reproduces the aggregate gap to within 2
+percent; by the largest budget the deficit localizes there entirely. A
+pre-registered test confirms the account: it predicts a 0.02 to 0.05 nat
+gap on knowledge-dense web text, and a matched pair trained on fineweb-edu
+measures 0.040. Within the tested regime, attention does the rest.
+\end{abstract}
+
+\section{Introduction}
+
+The feed-forward network (FFN) has been a fixed component of the
+transformer block since its introduction \citep{vaswani2017attention}, and
+in modern decoder configurations it holds roughly two thirds of
+non-embedding parameters. A substantial interpretability literature argues
+that these layers act as the model's parametric memory: key--value stores
+over training facts \citep{geva2021transformer,geva2022transformer}, the
+locus of editable factual associations \citep{meng2022locating}, and the
+home of identifiable knowledge neurons \citep{dai2022knowledge}. Yet the
+converse experiment, removing the FFN entirely and measuring what is
+actually lost, has never been run under controls. The closest attempt
+folded equivalent capacity back into attention as persistent memory
+vectors \citep{sukhbaatar2019augmenting}; probing and editing studies
+localize function without deleting it; and the classical theory of pure
+attention \citep{dong2021attention} analyzes a setting without residual
+connections that no one trains.
+
+The experiment is harder than it looks because removing the FFN perturbs
+three quantities at once: parameter count, compute per token, and the
+number of nonlinear composition steps. A single-control comparison is
+therefore confounded no matter which axis it fixes. We run the necessity
+test with three separate matchings, each holding one axis fixed
+(Table~\ref{tab:configs}), give every arm its own learning-rate sweep with
+a boundary-extension protocol so that no arm competes at another arm's
+preferred hyperparameters, and calibrate the experiment's noise floor with
+an optimizer-equivalent control pair. All predictions were registered
+before the corresponding measurements were made, and one, the gap on
+knowledge-dense text, was registered numerically before the run was
+launched.
+
+The result is a monotone sequence that decomposes the question. Deleting
+feed-forward layers in place, at matched depth, costs 0.47 nats of
+validation loss. At matched training FLOPs, where attention's quadratic
+term crowds out parameters, the standard transformer still leads by 0.26
+nats. But at matched parameter count, with the freed budget reallocated
+into attention depth, the gap collapses to $+0.0055$ and $+0.0054$ nats on
+clean seed pairs, within cross-seed variability, and it shrinks
+monotonically across separately trained 5B, 30B, and 105B token budgets
+while staying flat across a 29$\times$ non-embedding parameter range at
+fixed tokens. The FFN's parameters matter; its functional form largely
+does not, on this distribution.
+
+What remains of the gap is not diffuse. Decomposing the loss over token
+regions and task types, and separately over zero-shot benchmarks, the
+deficit concentrates on low-context prediction: tokens for which the
+context offers little to route, so that only parametric knowledge helps.
+At the largest budget the attention-only model is ahead on every answer
+region of the corpus, including memorization exercises, and behind only on
+low-context query tokens; on benchmarks, the one task whose answer sits in
+a provided passage favors the SAN with growing margin, while the one task
+demanding out-of-distribution recall favors the FFN model at every budget.
+A weight-spectrum analysis supplies the mechanism: in every model, routing
+matrices (Q/K) spectrally crystallize within the first quarter of
+training, while content matrices accumulate stable rank for as long as
+training continues; removing the FFN relocates this accumulation to the
+attention output projection, the attention-only model's only write path
+into the residual stream.
+
+Our contributions: (i) the first controlled necessity test of the
+transformer FFN, with parameter, FLOP, and depth matchings, per-arm
+learning-rate fairness, and a calibrated noise floor; (ii) a three-way
+localization of the residual gap to low-context prediction, confirmed by a
+numerically pre-registered out-of-distribution test (predicted 0.02--0.05
+nats on fineweb-edu; measured 0.040); (iii) the identification of
+QK-normalization, not feed-forward layers or residual gating, as the
+component that keeps deep attention-only stacks trainable; and (iv) a
+weight-spectrum account in which routing crystallizes early, content
+accumulates throughout, and storage relocates when the FFN is removed.
+
+\section{Related Work}
+
+\textbf{The FFN as memory.} \citet{geva2021transformer} identify FFN
+layers as key--value memories; \citet{geva2022transformer} refine the
+mechanism; ROME \citep{meng2022locating} and knowledge neurons
+\citep{dai2022knowledge} localize editable facts in mid-layer FFNs. These
+are probing and editing results; ours is the causal complement, showing by
+deletion that the capability lost is precisely parametric storage.
+Attention weights store associations too \citep{elhage2021mathematical},
+so storage is a tendency with causal evidence rather than an exclusive
+location; our decomposition measures the tendency's size instead of
+assuming it.
+\citet{pires2023one} find FFNs redundant across layers;
+\citet{he2024simplifying} remove other block components via
+signal-propagation arguments.
+
+\textbf{Attention-only models.} \citet{sukhbaatar2019augmenting} remove
+the FFN but restore its capacity as persistent memory vectors, leaving the
+necessity question open. The mechanistic-interpretability literature
+studies small attention-only transformers as an analyzable model class
+\citep{elhage2021mathematical,olsson2022context}, establishing the QK/OV
+routing-versus-content decomposition that our spectral dynamics confirm at
+realistic depth. \citet{dong2021attention} prove rank collapse for
+attention stacks without residuals; our 48-layer results and rank
+measurements bound where that analysis applies to trained practice, and
+identify QK-normalization \citep{henry2020query,dehghani2023scaling} as
+the operative stabilizer.
+
+\textbf{The dual ablation.} MLP-only architectures
+\citep{tolstikhin2021mlp,liu2021pay} map the attention-free direction;
+MetaFormer \citep{yu2022metaformer} argues the block frame matters more
+than the mixer. We supply the missing attention-only side for language
+modeling: deleting the channel MLP costs 0.006 nats at matched parameters,
+with a specific, predictable residual profile.
+
+\textbf{Components and optimizer.} Our scalar residual gates belong to the
+Highway/ReZero/LayerScale family
+\citep{srivastava2015highway,bachlechner2020rezero}; sandwich
+normalization follows \citet{shleifer2021normformer}; zero-centered norm
+gains follow \citet{olmo2024olmo2}; gated attention outputs are studied by
+\citet{qiu2025gated}, and depth-wise residual reweighting by
+\citet{kimi2026attnres}. We train with Muon
+\citep{jordan2024muon,liu2025muon} against an AdamW control.
+
+\textbf{Data regime.} We pretrain on SYNTH \citep{pleias2025synth}, a
+reasoning-dense synthetic corpus, deliberately overtrained relative to
+compute-optimal \citep{hoffmann2022chinchilla}, in the small-model
+synthetic-pretraining lineage of
+\citet{eldan2023tinystories,gunasekar2023textbooks}; repetition behavior
+extends \citet{muennighoff2023scaling} to synthetic data. Chain-of-thought
+expressivity results \citep{merrill2024expressive,feng2023towards}
+motivate the trace-formatted regime, with the caveat that those
+constructions use MLPs.
+
+\section{Experimental Setup}
+
+\textbf{Architecture.} A SAN block is a pre-norm attention block with the
+FFN deleted, exactly:
+\begin{align*}
+u &= \mathrm{ZCN}(x), \qquad \mathrm{ZCN}(z) = (1+\gamma)\odot
+z/\mathrm{RMS}(z),\ \gamma\ \text{init}\ 0\\
+q,k,v &= W_q u,\ W_k u,\ W_v u \qquad \text{(GQA: 8 query, 4 KV heads)}\\
+q,k &= \mathrm{RoPE}\big(\mathrm{ZCN}_{\mathrm{head}}(q),\
+\mathrm{ZCN}_{\mathrm{head}}(k)\big) \qquad \text{(QK-norm)}\\
+A &= \mathrm{softmax}\big(qk^{\top}/\sqrt{d_h} + M\big)\\
+y &= x + \sigma(g)\cdot W_o(A\,v)
+\end{align*}
+with $M$ the causal, document-boundary mask over packed 2048-token rows,
+$g$ a scalar per sublayer (init 0, so every branch starts at half
+strength), tied embeddings, and a final ZCN before the head. The control
+arm inserts a SwiGLU FFN, $y' = y + \sigma(g_2)\cdot
+W_{\mathrm{down}}\,\mathrm{SwiGLU}(W_{\mathrm{gate}}\tilde u,
+W_{\mathrm{up}}\tilde u)$ with $d_{ff}=4d$, after attention; both arms
+share one implementation. The complete inventory of per-position nonlinearities in
+the SAN is the attention softmax and the normalizations: there is no
+learned per-position feature map, which is the entire experimental
+manipulation. Three elementary results sharpen what this removes
+(statements and proofs in the supplementary): conditioned on the attention
+pattern, a SAN layer is linear in the normalized context; per head, its
+update lies in the convex hull of transformed context vectors, so the
+layer transports content present in context rather than synthesizing it;
+and at sequence length one the entire depth-$L$ network collapses to a
+linear map modulated by $L$ scalars. Cross-token attention is the only
+escape from this bottleneck, and pricing that restriction is what the
+experiments do.
+
+\textbf{Matchings.} Table~\ref{tab:configs} gives the three controls.
+Removing the FFN from a 20-layer model (iso-depth) deletes 72\% of its
+parameters; matching parameters instead (iso-param) reallocates the budget
+into depth, 20 attention-only layers against 4 standard blocks; matching
+training FLOPs (iso-FLOP) sits between, because attention pays a
+parameter-free quadratic cost in sequence length. No single matching is
+the fair one; we report all three.
+
+\input{Figures/tab1_configs}
+
+\textbf{Fairness protocol.} Every arm $\times$ optimizer cell received its
+own learning-rate sweep at 5B tokens (0.5$\times$/1$\times$/2$\times$
+around a base point, with a boundary rule extending any sweep-edge winner
+until its curve turned; 17 cells total). The locked rates are interior
+minima for all four arms. Global batch (512 rows, 1.05M tokens/step),
+schedule shape (warmup-stable-decay), data order, validation set, and all
+masking are identical across arms. Where a training phase ran on 7-GPU
+nodes, batch and learning rates were frame-matched so effective values
+equal the 8-GPU locks (511 vs.\ 512 rows, 0.2\%).
+
+\textbf{Noise floor.} Our zero-centered RMSNorm and standard RMSNorm are
+optimizer-equivalent under kernel-only weight decay (the gain
+parameterizations differ by a constant shift, and Adam-family updates are
+shift-invariant). Training both anyway calibrates the same-seed noise
+floor: $\Delta = 0.0015$ nats. Every "within noise" claim below is against
+this floor or the three-seed spread.
+
+\textbf{Evaluation.} Validation loss on a fixed held-out pool; a
+decomposition of loss over ChatML token regions (query, reasoning trace,
+answer; region boundaries are atomic tokenizer symbols) and over the
+corpus's exercise taxonomy; zero-shot loglikelihood benchmarks via
+lm-evaluation-harness \citep{gao2023lmeval}; and singular-value spectra of
+every weight matrix over milestone checkpoints. All training curves,
+evaluation reports, and checkpoints will be released.
+
+\section{The Cost of Removing Feed-Forward Layers}
+
+\input{Figures/tab2_main}
+
+Table~\ref{tab:main} and Figure~\ref{fig:curves} give the main result as a
+monotone sequence. Deleting FFNs in place (iso-depth control, 87M
+$\rightarrow$ 24M parameters) costs 0.470 nats. At matched compute
+(iso-FLOP), where the FFN arm carries 1.8$\times$ the parameters, it leads
+by 0.263. At matched parameters the gap is $+0.0055$ and $+0.0054$ nats on
+the two clean seed pairs, agreeing to $10^{-4}$; the third pair contains a
+documented terminal-phase instability in the FFN run (gradient-norm ramp
+at the learning-rate floor; supplementary) and reverses the sign. The
+sequence orders exactly by how much parameter budget the control lets
+attention reclaim.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{Figures/fig1_e1_curves.pdf}
+\caption{Validation loss over 105B tokens: three SAN seeds, three FFN
+iso-param seeds, and the iso-FLOP and iso-depth controls. The iso-param
+pair is visually indistinguishable through training.}
+\label{fig:curves}
+\end{figure}
+
+\textbf{The token axis.} The iso-param gap falls from 0.046 nats at 5B
+tokens to 0.019 at 30B to 0.0055 at 105B, each budget separately trained
+and separately tuned (different schedule horizons), so this is not one
+curve read at three points. More training closes the gap.
+
+\textbf{The parameter axis.} At a fixed 31.5B-token budget across five
+matched size pairs (Figure~\ref{fig:ladder}), the gap is $-0.045$ nats at
+the smallest size (the 2-layer FFN partner hits a depth floor first),
+crosses zero, and plateaus at $\approx$0.02 nats from 16M to 57M
+non-embedding parameters. The gap does not grow with scale in the tested
+range.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{Figures/fig3_ladder.pdf}
+\caption{Iso-token scaling (31.5B tokens per size). The SAN wins at the
+smallest size; from 16M non-embedding parameters upward the gap is flat at
+$\approx$0.02 nats.}
+\label{fig:ladder}
+\end{figure}
+
+\textbf{Repetition.} Constraining both arms to 2M, 8M, or 32M unique
+documents at fixed tokens (up to 18 epochs) costs at most 0.010 nats and
+shows no architecture $\times$ repetition interaction (supplementary),
+extending data-constrained scaling results \citep{muennighoff2023scaling}
+to synthetic data.
+
+\section{Where the Gap Lives}
+
+\input{Figures/tab5_regions}
+
+\textbf{Token regions.} Every corpus document has query, reasoning-trace,
+and answer regions delimited by atomic marker tokens.
+Table~\ref{tab:regions} and Figure~\ref{fig:decomp} decompose the
+iso-param gap. At 31B tokens the per-token deficit on query regions
+($+0.052$) is five times the aggregate while carrying 8\% of corpus loss;
+the token-weighted sum of region gaps reproduces the aggregate to within
+2\%, so the decomposition is exhaustive. By 105B the localization is
+complete: the SAN leads on every answer region, including memorization
+exercises, and on traces; the deficit survives only on query tokens
+($+0.038$), the positions with the least context to route from. Across the
+size ladder the query deficit is the invariant, positive at every size and
+budget while every other region changes sign (Figure~\ref{fig:decomp}b).
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{Figures/fig2_decomposition.pdf}
+\caption{(a) Region-level gap at 31B vs.\ 105B tokens: with training the
+deficit localizes entirely to low-context query prediction. (b) Across
+matched size pairs, the query deficit is the only invariantly FFN-favored
+quantity.}
+\label{fig:decomp}
+\end{figure*}
+
+\textbf{Task types.} On answer regions by exercise, the sign flips in the
+storage-account's direction: at 31B the SAN is already better on rag,
+editing, and math answers (retrievable from prompt or trace) and worse on
+memorization and free-form generation; by 105B it leads on all of them.
+
+\input{Figures/tab4_downstream}
+
+\textbf{Benchmarks.} Table~\ref{tab:downstream} shows the same split at
+task level. Lambada, predicting a specific content word and, for
+SYNTH-trained models, an out-of-distribution recall task, favors the FFN
+arm at every budget. Sciq, whose answer sits in a provided support
+passage, favors the SAN, and the margin grows with training in a
+direction we registered in advance: from 31B to 105B the SAN improves
+(0.725 $\rightarrow$ 0.742) while the FFN model regresses (0.702
+$\rightarrow$ 0.661), with non-overlapping seed ranges. The remaining
+tasks sit at chance at these scales.
+
+\textbf{A pre-registered out-of-distribution test.} The account so far
+says the FFN's advantage is low-context prediction. Natural web text is
+mostly low-context prediction. Before launching the run, we registered
+the prediction that an iso-param pair trained on fineweb-edu would show a
+gap of 0.02 to 0.05 nats, bounded above by the pure query-region deficit
+and well above the SYNTH aggregate. The measured gap is 0.0398.
+Instructively, the same pair reverses on lambada (SAN 0.203 vs.\ FFN
+0.181): trained on distribution-matched text, the passage suffices to
+infer the final word, and lambada becomes a routing task. A task's
+storage-versus-routing identity is relative to the match between training
+distribution and task, a point the discussion returns to.
+
+\section{Mechanism: Weight-Spectrum Dynamics}
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{Figures/fig4_spectra.pdf}
+\caption{Stable rank ($\|W\|_F^2/\|W\|_2^2$, layer mean) of weight
+matrices over training. (a) Muon holds Q and output-projection spectra
+2--3$\times$ flatter than AdamW in the SAN. (b) Routing matrices (Q)
+crystallize by a quarter of training in every model; write-path matrices
+(SAN $W_o$, FFN down-projection) accumulate rank through the stable phase,
+contracting only in the learning-rate decay tail.}
+\label{fig:spectra}
+\end{figure*}
+
+Figure~\ref{fig:spectra} tracks the stable rank of every weight matrix
+over milestone checkpoints. Two regularities hold across all
+architectures, sizes, and budgets we trained. First, routing matrices
+(Q/K) spectrally crystallize within the first quarter of training and do
+not move thereafter; the optimizer sets the level (Muon holds them
+2--3$\times$ flatter than AdamW; the value projection is
+optimizer-invariant), but the schedule is universal. The Muon side is the
+a-priori expectation: for orthogonalized updates, Weyl's inequality bounds
+every singular value's per-step drift by the learning rate, though the
+bound controls drift only and does not by itself predict the level
+separation we observe (supplementary). Second, the matrices
+that write content into the residual stream accumulate stable rank for as
+long as the stable phase lasts: the FFN down-projection in FFN models, and
+in attention-only models the output projection $W_o$, which inherits the
+role. This is the training-dynamics face of the QK/OV
+routing-versus-content decomposition \citep{elhage2021mathematical}:
+selection structure is learned early and frozen; content capacity
+accrues indefinitely, in whichever matrices can hold it. Representation
+effective rank stays high everywhere (minimum layer rank 173 of 512 at 20
+layers), so the classical collapse regime
+\citep{dong2021attention,noci2022signal} is never approached with
+residuals and normalization in place.
+
+\section{Component Ablations}
+
+\input{Figures/tab3_ablations}
+
+Table~\ref{tab:ablations} isolates the components. Three results matter.
+First, QK-normalization is load-bearing: removing it diverges outright at
+the tuned learning rate, the only divergence in the study; the claim is
+scoped to the tuned rate. Second, residual gating is performance-neutral
+everywhere, at 20--48 layers in the SAN arm and in the FFN mirror, matching
+ReZero-family expectations \citep{bachlechner2020rezero}; the gates'
+value was diagnostic, as their trajectories exposed the FFN arm's
+self-pruning under learning-rate stress and the optimizer split
+(supplementary). Third, the only variant to beat the baseline is sandwich
+normalization \citep{shleifer2021normformer} at $-0.009$ nats. Depth at
+iso-param is U-shaped with a 20-layer optimum, and 48-layer attention-only
+stacks train without incident. The optimizer interaction is
+budget-dependent: a full crossover at 5B tokens (each architecture
+preferring a different optimizer) washes out entirely by 30B.
+
+\section{Discussion and Limitations}
+
+\textbf{What the FFN buys.} Under controls, the transformer's FFN is not
+a distinct computational primitive whose removal breaks the model; it is
+parameter capacity attached to a write path. Give the same capacity to
+attention depth and, on reasoning-dense data, nothing measurable is lost
+in aggregate; what is lost specifically is performance on tokens where
+context provides nothing to route, and the loss relocates, in weight
+space, to whichever matrices write content into the stream.
+
+\textbf{Distribution-relative task identity.} The fineweb reversal on
+lambada and the iso-depth model's pattern (best in-distribution loss,
+worst out-of-distribution recall) argue that storage-versus-routing is
+not a fixed property of a task: it is a property of the match between the
+task and the training distribution. This reframes small-model benchmark
+comparisons generally, and it cautions against reading our SYNTH results
+as distribution-free.
+
+\textbf{When would one use a SAN?} At matched parameters the SAN pays
+$\approx$2$\times$ FLOPs per token at 2048 context; iso-FLOP favors the
+FFN. The trade favors attention-only models where parameters, not FLOPs,
+bind (on-device memory limits), where architectural simplicity has
+analysis value (a SAN is one repeated, interpretable primitive), and on
+trace-rich distributions. We claim regime, not superiority.
+
+\textbf{Limitations.} All results are at or below 87M parameters and 105B
+tokens, on one reasoning-dense corpus plus one knowledge-dense control
+pair; MMLU-class benchmarks are at chance throughout and cannot yet
+discriminate. The storage account itself predicts a wider gap on
+storage-heavy mixtures at larger scale, which is the natural next
+experiment. Eight predictions were registered before measurement; the
+registration and its scorecard, including the two falsified predictions,
+are in the supplementary material.
+
+\bibliography{references}
+
+\end{document}

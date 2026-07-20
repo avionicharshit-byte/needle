@@ -1,0 +1,22 @@
+% Table 2: main result, val loss @105B tokens
+\begin{table}[t]\centering\small
+\begin{tabular}{llll}
+\toprule
+Model & Params & Val loss @105B & $\Delta$ vs SAN \\
+\midrule
+SAN (3 seeds) & 24.13M & $2.0685 \pm 0.0028$ & --- \\
+FFN iso-param (3 seeds) & 24.12M & $2.0812 \pm 0.0230$\,$^\dagger$ & $-0.0055$\,$^\ddagger$ \\
+FFN iso-FLOP & 43M & 1.8059 & $-0.263$ \\
+FFN iso-depth & 87.06M & 1.5982 & $-0.470$ \\
+\midrule
+\multicolumn{4}{l}{fineweb-edu pair @31.5B: SAN 3.0131, FFN iso-param 2.9733, $\Delta = 0.0398$} \\
+\bottomrule
+\end{tabular}
+\caption{Deleting FFNs in place (iso-depth) costs 0.47 nats; at matched
+FLOPs 0.26; reallocating the budget into attention depth closes the gap to
+seed noise. $^\dagger$Includes one run with a documented terminal
+instability (supplementary); excluding it, $2.0650 \pm 0.0006$.
+$^\ddagger$Clean-pair paired $\Delta$: $+0.0055$ (s42), $+0.0054$ (s44);
+incident pair $-0.0491$. Same-seed noise floor: 0.0015.}
+\label{tab:main}
+\end{table}

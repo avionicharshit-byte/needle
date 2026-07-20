@@ -2,8 +2,10 @@
 
 Can MLPs be dropped from transformer networks entirely? SAN (Simple
 Attention Networks) is the attention-only arm of a controlled test of that
-question on reasoning-oriented pretraining. Rigorous argument:
-[theory.md](theory.md). Experiment design: [experiments.md](experiments.md).
+question on reasoning-oriented pretraining. The paper and its supplementary
+material live in [paper/](paper/); the registered theory and experiment
+ledger are preserved in the git history (theory.md, experiments.md,
+registered 2026-07-14).
 
 ## Abstract (AAAI-27)
 
@@ -35,9 +37,11 @@ QK-normalization, not feed-forward layers or residual gating, keeps
 diffuse: low-context query prediction carries a per-token deficit five
 times the aggregate but only 8 percent of corpus loss, and the
 token-weighted decomposition reproduces the aggregate gap to within 2
-percent. The same account predicts a wider aggregate gap on knowledge-dense
-text, where low-context prediction dominates. Within the tested regime,
-attention does the rest.
+percent; by the largest budget the deficit localizes there entirely, the
+attention-only model ahead on every answer region. A pre-registered test
+confirms the account: it predicts a 0.02 to 0.05 nat gap on knowledge-dense
+web text, and a matched pair trained on fineweb-edu measures 0.040. Within
+the tested regime, attention does the rest.
 
 ```
       ┌───────────────┐
@@ -115,18 +119,23 @@ block without it; all E3 comparisons are internal to that sweep.
 
 ## Gated Residuals
 
-Without FFN, there is no per-position nonlinear rewriting per layer. This makes residual connection design critical.
+Without FFN, there is no per-position nonlinear rewriting per layer, so
+residual design was a first-class ablation axis (E3).
 
-- **No residual** `x = Attn(Norm(x))` — each layer fully rewrites, but the
-  gradient highway is gone; deep stacks will not train.
-- **Standard residual** `x = x + Attn(Norm(x))` — trains, but branch
-  magnitudes are uncontrolled and stream variance grows with depth.
+- **No residual** `x = Attn(Norm(x))` — trains at 20L but collapses
+  performance (+0.75 nats, E3); the skip is not optional.
+- **Standard residual** `x = x + Attn(Norm(x))` — branch magnitudes
+  uncontrolled in principle; in practice matches gated at every depth
+  tested (20–48L, Δ ≤ 0.004).
 - **Gated residual (ours)** `x = x + sigmoid(g) * Attn(Norm(x))` — scalar per
-  sublayer, g init 0 → half-strength start. Combined with the 1/√(2N) output
-  init, residual-stream variance stays bounded independent of depth
-  (theory.md §5.2). Layers can sharpen (g→∞) or self-prune (g→−∞) without
-  losing gradient flow. Scalar member of the ReZero/SkipInit/LayerScale
-  family — recipe, not novelty.
+  sublayer, g init 0 → half-strength start; bounded stream variance with the
+  1/√(2N) output init (theory.md §5.2). Scalar member of the
+  ReZero/SkipInit/LayerScale family — recipe, not novelty.
+- **Measured verdict (E3):** gates are performance-neutral everywhere; their
+  value is diagnostic — gate trajectories exposed the FFN self-pruning under
+  LR stress (E0) and the optimizer split (E2). The load-bearing stabilizer
+  is QK-norm: removing it diverges outright at the tuned LR. The one variant
+  that beats baseline is the post-attention sandwich norm (−0.009).
 
 ## ZCRMSNorm
 
@@ -151,6 +160,10 @@ Without FFN, there is no per-position nonlinear rewriting per layer. This makes 
   compound multiplicatively; flat updates keep the composition
   well-conditioned. Predicted signature: AdamW should hurt the SAN arm more
   than the FFN arm (theory.md §5.4, predictions P6–P7).
+- **Outcome:** the interaction is real but short-horizon — full crossover at
+  5B tokens, washed out by 30B (E2). The mechanism is confirmed directly in
+  weight space: Muon holds Q/K/out stable rank 2–3× above AdamW while
+  v_proj is optimizer-invariant (E7).
 
 ## Quickstart
 
