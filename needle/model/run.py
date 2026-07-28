@@ -179,7 +179,7 @@ def generate(model, params, tokenizer, query, tools="[]", max_gen_len=DEFAULT_MA
     return result
 
 
-def generate_batch(model, params, tokenizer, queries, tools_list, max_gen_len=DEFAULT_MAX_GEN_LEN, max_enc_len=DEFAULT_MAX_ENC_LEN, normalize=True, constrained=True):
+def generate_batch(model, params, tokenizer, queries, tools_list, max_gen_len=DEFAULT_MAX_GEN_LEN, max_enc_len=DEFAULT_MAX_ENC_LEN, normalize=True, constrained=True, value_enums=None):
     """Batch-generate tool-call outputs for multiple examples at once.
 
     Encoder: [query_tokens..., <tools>, tools_tokens...] per example, truncated to max_enc_len.
@@ -227,7 +227,7 @@ def generate_batch(model, params, tokenizer, queries, tools_list, max_gen_len=DE
     constrained_decoder = None
     if constrained:
         from .constrained import build_constrained_decoder
-        constrained_decoder = build_constrained_decoder(tools_list, tokenizer)
+        constrained_decoder = build_constrained_decoder(tools_list, tokenizer, value_enums=value_enums)
 
     logits = decode_fn(params, dec_buffer, encoder_out, enc_mask)
 

@@ -10,7 +10,10 @@ Needle output format (compact JSON, no spaces):
 Constrained regions:
   - Tool names after "name":" are constrained to known tool names
   - Argument keys after "arguments":{ are constrained to known param names
-  - Argument values are unconstrained (strings, numbers, booleans, objects)
+  - Argument VALUES of parameters with declared enums (an "enum" list in the
+    schema, or an out-of-band value_enums dict) are constrained to the legal
+    values, INCLUDING the opening quote (so non-string garbage is impossible).
+    Values of parameters without enums remain unconstrained.
 """
 
 import json
@@ -73,9 +76,13 @@ class ToolConstraints:
     not from the schema-level keys (``type``, ``properties``, ``required``).
     """
 
-    def __init__(self, tools_json: str):
+    def __init__(self, tools_json: str, value_enums: dict | None = None):
+        """value_enums: optional out-of-band {param_name: [legal values]} applied
+        to every function that has that parameter (e.g. dynamic device-side sets:
+        contacts, playlists, rooms). Schema-declared "enum" lists are also read."""
         self.name_trie = Trie()
         self.param_tries: dict[str, Trie] = {}
+        self.value_tries: dict[tuple[str, str], Trie] = {}
 
         try:
             tools = json.loads(tools_json)
@@ -85,6 +92,19 @@ class ToolConstraints:
         if not isinstance(tools, list):
             tools = []
 
+        shared_tries: dict[str, Trie] = {}       # out-of-band enums, built once per key
+        if value_enums:
+            for key, vals in value_enums.items():
+                vt = Trie()
+                for v in vals:
+                    if isinstance(v, str) and v:
+                        vt.insert(v)
+                if vt.root.children:
+                    shared_tries[key] = vt
+        # kept separately so value constraints survive even when the function
+        # name was never parsed (malformed/unknown name -> current_function "")
+        self.shared_value_tries = shared_tries
+
         for tool in tools:
             if not isinstance(tool, dict):
                 continue
@@ -93,22 +113,42 @@ class ToolConstraints:
                 continue
             self.name_trie.insert(name)
 
+            # device-known enums apply GLOBALLY by param name - even if the model
+            # hallucinates the param onto a tool that doesn't declare it, the
+            # value stays legal (the executor then rejects the unknown arg)
+            for key, vt in shared_tries.items():
+                self.value_tries[(name, key)] = vt
+
             params = tool.get("parameters", {})
             if isinstance(params, dict):
                 param_trie = Trie()
                 for key, val in params.items():
                     if isinstance(val, dict):
                         param_trie.insert(key)
+                        enum_vals = val.get("enum")
+                        if enum_vals:
+                            vt = Trie()
+                            for v in enum_vals:
+                                if isinstance(v, str) and v:
+                                    vt.insert(v)
+                            if vt.root.children:
+                                self.value_tries[(name, key)] = vt
                 self.param_tries[name] = param_trie
 
     def get_param_trie(self, function_name: str) -> Trie | None:
         return self.param_tries.get(function_name)
+
+    def get_value_trie(self, function_name: str, param: str) -> Trie | None:
+        vt = self.value_tries.get((function_name, param))
+        return vt if vt is not None else self.shared_value_tries.get(param)
 
 
 class JsonState(Enum):
     FREE = auto()
     IN_NAME = auto()
     IN_ARG_KEY = auto()
+    AWAIT_VALUE = auto()   # after "<enum-key>": -> next char MUST open a legal string value
+    IN_ARG_VALUE = auto()  # inside the quotes of an enum-constrained value
 
 
 class JsonStateMachine:
@@ -126,16 +166,25 @@ class JsonStateMachine:
     do not trigger false IN_ARG_KEY transitions.
     """
 
-    def __init__(self):
+    def __init__(self, tool_constraints: "ToolConstraints | None" = None):
         self.state = JsonState.FREE
         self.buffer = ""
         self.constrained_buf = ""
         self.current_function = ""
+        self.current_key = ""
         self.in_arguments = False
         self.arguments_depth = 0
         self.nesting_depth = 0
         self.in_string = False
         self.prev_char_escape = False
+        self.val_escape = False
+        self.expect_colon = False     # an enum'd key just closed; next char must be ':'
+        self.tc = tool_constraints    # needed to know which keys have value enums
+
+    def _value_trie(self) -> "Trie | None":
+        if self.tc is None:
+            return None
+        return self.tc.get_value_trie(self.current_function, self.current_key)
 
     def feed(self, text: str):
         """Feed generated text character-by-character to drive transitions."""
@@ -147,12 +196,50 @@ class JsonStateMachine:
             if ch == '"':
                 if self.state == JsonState.IN_NAME:
                     self.current_function = self.constrained_buf
+                else:
+                    self.current_key = self.constrained_buf
+                    self.expect_colon = self._value_trie() is not None
                 self.constrained_buf = ""
                 self.state = JsonState.FREE
             else:
                 self.constrained_buf += ch
             self.buffer += ch
             return
+
+        if self.state == JsonState.IN_ARG_VALUE:
+            self.buffer += ch
+            if self.val_escape:
+                self.val_escape = False
+                self.constrained_buf += ch
+                return
+            if ch == '\\':
+                self.val_escape = True
+                self.constrained_buf += ch
+                return
+            if ch == '"':
+                self.constrained_buf = ""
+                self.state = JsonState.FREE
+                return
+            self.constrained_buf += ch
+            return
+
+        if self.state == JsonState.AWAIT_VALUE:
+            if ch == '"':
+                self.buffer += ch
+                self.constrained_buf = ""
+                self.val_escape = False
+                self.state = JsonState.IN_ARG_VALUE
+                return
+            self.state = JsonState.FREE      # fallback emitted a non-string value:
+            # fall through to normal FREE processing of this char
+
+        if self.expect_colon:                # an enum'd key just closed; ':' is next
+            self.expect_colon = False
+            if ch == ':':
+                self.buffer += ch
+                self.state = JsonState.AWAIT_VALUE
+                return
+            # anything else: malformed JSON, give up on constraining this value
 
         self.buffer += ch
 
@@ -284,6 +371,87 @@ def _check_token_valid(token_text: str, trie_node: TrieNode) -> bool:
     return True
 
 
+def _walk_value_path(text: str, trie_root: TrieNode) -> bool:
+    """Validate chars that follow an enum'd key's closing quote:
+    ``:`` then ``"`` then a value-trie walk; a further ``"`` requires a
+    terminal node (value complete; the structural tail is unchecked).
+    Any prefix of this path is valid (the token may stop anywhere)."""
+    if not text:
+        return True
+    if text[0] != ':':
+        return False
+    rest = text[1:]
+    if not rest:
+        return True
+    if rest[0] != '"':
+        return False
+    node = trie_root
+    for ch in rest[1:]:
+        if ch == '"':
+            return node.is_terminal
+        if ch not in node.children:
+            return False
+        node = node.children[ch]
+    return True
+
+
+def _check_token_valid_key(token_text: str, key_node: TrieNode, key_buf: str,
+                           get_value_trie) -> bool:
+    """IN_ARG_KEY token check that also validates any VALUE characters the
+    token smuggles past the key's closing quote (``ion":"gar`` etc.)."""
+    node = key_node
+    consumed = []
+    for i, ch in enumerate(token_text):
+        if ch == '"':
+            if not node.is_terminal:
+                return False
+            vtrie = get_value_trie(key_buf + "".join(consumed))
+            if vtrie is None:
+                return True                     # no enum: tail unchecked (as before)
+            return _walk_value_path(token_text[i + 1:], vtrie.root)
+        if ch not in node.children:
+            return False
+        node = node.children[ch]
+        consumed.append(ch)
+    return True
+
+
+def _check_token_valid_value_open(token_text: str, trie_root: TrieNode) -> bool:
+    """Valid opener for an enum'd value: a leading ``"`` then a walk of the
+    value trie; a SECOND ``"`` inside the token closes the value and requires
+    a terminal node (whole values in one token, e.g. ``"on"``)."""
+    if not token_text or token_text[0] != '"':
+        return False
+    node = trie_root
+    for ch in token_text[1:]:
+        if ch == '"':
+            return node.is_terminal
+        if ch not in node.children:
+            return False
+        node = node.children[ch]
+    return True
+
+
+def apply_value_open_constraints(
+    logits: np.ndarray,
+    trie_root: TrieNode,
+    token_strings: list[str],
+    token_index: TokenIndex,
+) -> np.ndarray:
+    """Mask logits in AWAIT_VALUE: the next token MUST open a legal enum value."""
+    vocab_size = logits.shape[0]
+    mask = np.full(vocab_size, False)
+    for tid in token_index.candidates_for('"'):
+        if _check_token_valid_value_open(token_strings[tid], trie_root):
+            mask[tid] = True
+    if not mask.any():
+        logger.warning("Constrained decoding: no valid value-opening tokens, falling back")
+        return logits
+    masked = logits.copy()
+    masked[~mask] = -np.inf
+    return masked
+
+
 def apply_constraints(
     logits: np.ndarray,
     state: JsonState,
@@ -344,13 +512,14 @@ class ConstrainedDecoder:
                  tokenizer=None):
         self.batch_size = len(tool_constraints_list)
         self.tool_constraints = tool_constraints_list
-        self.machines = [JsonStateMachine() for _ in range(self.batch_size)]
+        self.machines = [JsonStateMachine(tc) for tc in tool_constraints_list]
         self.token_strings = token_strings
         self.token_index = token_index
 
     def is_active(self, batch_idx: int) -> bool:
         """Return True if this batch element is currently in a constrained state."""
-        return self.machines[batch_idx].state != JsonState.FREE
+        m = self.machines[batch_idx]
+        return m.state != JsonState.FREE or (m.expect_colon and m._value_trie() is not None)
 
     def constrain_logits(self, logits: np.ndarray, batch_idx: int) -> np.ndarray:
         """Apply grammar constraints to logits for a single batch element."""
@@ -358,12 +527,60 @@ class ConstrainedDecoder:
         tc = self.tool_constraints[batch_idx]
 
         if machine.state == JsonState.FREE:
+            if machine.expect_colon:            # colon-crossing tokens (':"ga...') get
+                vtrie = machine._value_trie()   # validated through the whole value path
+                if vtrie is None:
+                    return logits
+                vocab_size = logits.shape[0]
+                mask = np.full(vocab_size, False)
+                for tid in self.token_index.candidates_for(':'):
+                    if _walk_value_path(self.token_strings[tid], vtrie.root):
+                        mask[tid] = True
+                if not mask.any():
+                    logger.warning("Constrained decoding: no valid colon tokens, falling back")
+                    return logits
+                masked = logits.copy()
+                masked[~mask] = -np.inf
+                return masked
             return logits
+
+        if machine.state == JsonState.AWAIT_VALUE:
+            vtrie = machine._value_trie()
+            if vtrie is None:
+                return logits
+            return apply_value_open_constraints(logits, vtrie.root,
+                                                self.token_strings, self.token_index)
 
         if machine.state == JsonState.IN_NAME:
             trie = tc.name_trie
         elif machine.state == JsonState.IN_ARG_KEY:
             trie = tc.get_param_trie(machine.current_function)
+            if trie is None:
+                return logits
+            node = trie.get_node(machine.constrained_buf)
+            if node is None:
+                logger.warning("Constrained decoding: off-trie at %r, falling back", machine.constrained_buf)
+                return logits
+            # key tokens may smuggle value chars past the closing quote -> full-path check
+            get_vt = lambda key: tc.get_value_trie(machine.current_function, key)
+            vocab_size = logits.shape[0]
+            mask = np.full(vocab_size, False)
+            first_chars = set(node.children.keys())
+            if node.is_terminal:
+                first_chars.add('"')
+            for fc in first_chars:
+                for tid in self.token_index.candidates_for(fc):
+                    if not mask[tid] and _check_token_valid_key(
+                            self.token_strings[tid], node, machine.constrained_buf, get_vt):
+                        mask[tid] = True
+            if not mask.any():
+                logger.warning("Constrained decoding: no valid key tokens, falling back")
+                return logits
+            masked = logits.copy()
+            masked[~mask] = -np.inf
+            return masked
+        elif machine.state == JsonState.IN_ARG_VALUE:
+            trie = machine._value_trie()
             if trie is None:
                 return logits
         else:
@@ -397,13 +614,16 @@ def _get_token_data(tokenizer) -> tuple[list[str], TokenIndex]:
 def build_constrained_decoder(
     tools_json_list: list[str],
     tokenizer,
+    value_enums: dict | None = None,
 ) -> ConstrainedDecoder:
     """Convenience factory: build a ConstrainedDecoder for a batch of examples.
 
     Args:
         tools_json_list: list of tool JSON strings (one per batch element)
         tokenizer: NeedleTokenizer with .sp SentencePiece model
+        value_enums: optional {param_name: [legal values]} - device-side closed
+            sets (contacts, rooms, playlists); schema "enum" fields also work
     """
     token_strings, token_index = _get_token_data(tokenizer)
-    tc_list = [ToolConstraints(tj) for tj in tools_json_list]
+    tc_list = [ToolConstraints(tj, value_enums=value_enums) for tj in tools_json_list]
     return ConstrainedDecoder(tc_list, token_strings, token_index)
