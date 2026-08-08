@@ -26,6 +26,12 @@ def load_checkpoint(path):
         os.makedirs(local_dir, exist_ok=True)
         path = hf_hub_download(HF_REPO, f"checkpoints/{os.path.basename(path)}",
                                repo_type="model", local_dir=local_dir)
+        try:
+            # The Hub only increments the model download counter on requests
+            # to config.json, not on checkpoint files themselves.
+            hf_hub_download(HF_REPO, "config.json", repo_type="model")
+        except Exception:
+            pass
     with open(path, "rb") as f:
         ckpt = pickle.load(f)
     version = ckpt.get("format_version") if isinstance(ckpt, dict) else None
