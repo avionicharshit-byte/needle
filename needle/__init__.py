@@ -25,6 +25,8 @@ def _library_path():
 
 
 _lib_handle = None
+_active = None
+_active_weights = None
 
 
 def _lib():
@@ -46,16 +48,28 @@ def _lib():
 class Needle:
     def __init__(self, tools=None, system=None, weights=None, tool_index_path=None, buffer_size=65536):
         self._functions = {}
-        if weights:
-            with open(weights, "rb") as handle:
+        self._weights = weights
+        self._system = (system or "").encode("utf-8")
+        tools_json = tools if isinstance(tools, str) else json.dumps(self._resolve(tools))
+        self._tools_json = tools_json.encode("utf-8")
+        self._tool_index_path = tool_index_path.encode("utf-8") if tool_index_path else None
+        self._buffer = ctypes.create_string_buffer(buffer_size)
+        self._bind()
+
+    def _bind(self):
+        global _active, _active_weights
+        if _active is self:
+            return
+        if self._weights and _active_weights != self._weights:
+            with open(self._weights, "rb") as handle:
                 blob = handle.read()
             if _lib().needle_load(blob, len(blob)) != 0:
-                raise RuntimeError(f"failed to load weights from {weights}")
-        tools_json = tools if isinstance(tools, str) else json.dumps(self._resolve(tools))
-        if _lib().needle_init((system or "").encode("utf-8"), tools_json.encode("utf-8"),
-                              tool_index_path.encode("utf-8") if tool_index_path else None) < 0:
+                raise RuntimeError(f"failed to load weights from {self._weights}")
+            _active_weights = self._weights
+        if _lib().needle_init(self._system, self._tools_json, self._tool_index_path) < 0:
+            _active = None
             raise RuntimeError("needle_init failed")
-        self._buffer = ctypes.create_string_buffer(buffer_size)
+        _active = self
 
     def _resolve(self, tools):
         schemas = []
@@ -73,6 +87,7 @@ class Needle:
         return schemas
 
     def complete(self, text, max_new_tokens=256):
+        self._bind()
         _lib().needle_complete(text.encode("utf-8"), int(max_new_tokens),
                                self._buffer, len(self._buffer))
         return json.loads(self._buffer.value.decode("utf-8"))
@@ -103,6 +118,7 @@ class Needle:
         return extract(text, schema, max_new_tokens=max_new_tokens)
 
     def reset(self):
+        self._bind()
         _lib().needle_reset()
 
 
