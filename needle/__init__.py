@@ -69,6 +69,12 @@ class Needle:
         global _active, _active_weights, _active_blob
         if _active is self:
             return
+        if not self._weights and _active_weights:
+            raise RuntimeError(
+                f"{_active_weights} is loaded and the engine cannot unload it, "
+                f"so this agent would silently answer with those weights; "
+                f"construct agents that want the base model before any tuned "
+                f"one, or run them in separate processes")
         if self._weights and _active_weights != self._weights:
             with open(self._weights, "rb") as handle:
                 blob = handle.read()
@@ -139,7 +145,8 @@ class Needle:
         return response
 
     def extract(self, text, schema, max_new_tokens=256):
-        return extract(text, schema, max_new_tokens=max_new_tokens)
+        return extract(text, schema, max_new_tokens=max_new_tokens,
+                       weights=self._weights)
 
     def reset(self):
         self._bind()
@@ -154,11 +161,12 @@ def _jsonable(value):
     return str(value)
 
 
-def extract(text, schema, system=None, max_new_tokens=256):
+def extract(text, schema, system=None, max_new_tokens=256, weights=None):
     """One-shot structured extraction: declare `schema` as the only tool and return
     the parsed object (a Pydantic instance if `schema` is a model, else a dict).
-    Re-initializes the shared engine with this single schema."""
-    agent = Needle(tools=[schema], system=system)
+    Re-initializes the shared engine with this single schema. Defaults to whatever
+    weights are already loaded, since the engine cannot unload them."""
+    agent = Needle(tools=[schema], system=system, weights=weights or _active_weights)
     response = agent.complete(text, max_new_tokens)
     calls = response.get("function_calls") or []
     if not calls:
