@@ -4,7 +4,18 @@ import re
 import sys
 import threading
 
-HELP = """Check the readme"""
+HELP = """usage: needle <command> [options]
+
+  run            run a checkpoint on a query
+  finetune       train a LoRA adapter on JSONL data
+  generate-data  synthesise training data via OpenRouter
+  build          export a checkpoint to a .cact archive
+  download       download weights or an engine build
+  fetch          fetch the engine for this platform
+  playground     serve the browser playground
+
+needle <command> --help for the options of one command.
+Check the readme for the rest."""
 
 
 def _weights_spec(spec):
@@ -108,7 +119,7 @@ def main():
 
     parser = argparse.ArgumentParser(prog="needle", add_help=False)
     sub = parser.add_subparsers(dest="command")
-    p = sub.add_parser("run", add_help=False)
+    p = sub.add_parser("run")
     p.add_argument("--checkpoint", type=str, required=True)
     p.add_argument("--query", type=str, default=None, help="Query text for tool-call generation")
     p.add_argument("--tools", type=str, default=None, help="Tools JSON for tool-call generation")
@@ -117,7 +128,7 @@ def main():
     p.add_argument("--no-constrained", action="store_true",
                    help="Disable grammar-constrained decoding for tool names/arg keys")
 
-    p = sub.add_parser("finetune", add_help=False)
+    p = sub.add_parser("finetune")
     p.add_argument("jsonl_path", type=str, help="Path to JSONL training data")
     p.add_argument("--checkpoint", type=str, default=None,
                    help="Base model checkpoint (auto-downloads from HuggingFace if omitted)")
@@ -138,7 +149,7 @@ def main():
     p.add_argument("--checkpoint-dir", type=str, default="checkpoints")
     p.add_argument("--out", type=str, default=None, help="Output adapter path (.pkl)")
 
-    p = sub.add_parser("generate-data", add_help=False)
+    p = sub.add_parser("generate-data")
     p.add_argument("--tools", type=str, default=None, help="Tool schemas JSON to seed generation")
     p.add_argument("--augment", type=str, default=None, help="Existing JSONL to expand")
     p.add_argument("--num-samples", type=int, default=100)
@@ -148,26 +159,26 @@ def main():
     p.add_argument("--model", type=str, default="deepseek/deepseek-v4-flash")
     p.add_argument("--output", type=str, default=None)
 
-    p = sub.add_parser("build", add_help=False)
+    p = sub.add_parser("build")
     p.add_argument("checkpoint", type=str, help="Base checkpoint (.pkl) to export")
     p.add_argument("--lora", type=str, default=None, help="LoRA adapter to merge before export")
     p.add_argument("--out", type=str, default=None, help="Output .cact path")
     p.add_argument("--upload", action="store_true", help="Push the .cact to $NEEDLE_HF_REPO")
     p.add_argument("--bits", type=str, default=None, choices=["2", "4"])
 
-    p = sub.add_parser("download", add_help=False)
+    p = sub.add_parser("download")
     p.add_argument("spec", type=str,
                    help="Platform folder (e.g. macos-arm64), or Hugging Face spec: "
                         "<org>/<repo>/<file>.cact, or <org>/<repo> if it holds one archive")
     p.add_argument("--out", type=str, default=".", help="Directory to place the files")
 
-    p = sub.add_parser("fetch", add_help=False)
+    p = sub.add_parser("fetch")
     p.add_argument("--out", type=str, default=None,
                    help="Directory to place the engine (default: the cache)")
     p.add_argument("--platform-tag", type=str, default=None,
                    help="Fetch the build for another device, e.g. manylinux2014_aarch64")
 
-    p = sub.add_parser("playground", add_help=False)
+    p = sub.add_parser("playground")
     p.add_argument("--weights", type=str, default=None,
                    help="Tuned .cact to serve (defaults to the base model from HuggingFace)")
     p.add_argument("--port", type=int, default=7860)
